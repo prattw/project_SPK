@@ -20,8 +20,19 @@ git push -u origin main
 ## 2. Create Railway project
 
 1. **New Project** → **Deploy from GitHub repo**
-2. Select your repository
-3. Railway detects `Dockerfile` / `railway.toml` automatically
+2. Select **`prattw/project_SPK`** branch **`main`**
+3. **Critical — use Docker, not Railpack**
+
+If build logs say `Railpack could not determine how to build` or snapshot is only ~295 B:
+
+1. Open your **service** → **Settings**
+2. **Source** → confirm repo `prattw/project_SPK`, branch `main`
+3. **Root Directory** → leave **empty** (or `/`) — NOT a subfolder
+4. **Build** → **Builder** → select **Dockerfile**
+5. **Dockerfile path** → `Dockerfile`
+6. Save → **Redeploy**
+
+This repo includes `railway.toml` and `railway.json` both set to `DOCKERFILE`.
 
 ## 3. Environment variables
 
