@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Project SPK</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <h1>Project SPK</h1>
+      <p class="tagline">Construction docs · compare · ask</p>
+
+      <div id="authGate" class="auth-gate" hidden>
+        <label for="apiKeyInput">Access key</label>
+        <input type="password" id="apiKeyInput" placeholder="Enter team API key" autocomplete="off" />
+        <button type="button" id="authSaveBtn" class="auth-save">Continue</button>
+        <p class="hint">Required on hosted deployments. Stored for this browser session only.</p>
+      </div>
+
+      <div id="configStatus" class="config-status" hidden></div>
+
+      <label class="upload-btn">
+        <input type="file" id="fileInput" multiple accept=".pdf,.xer,.xml,.ifc,.gltf,.glb,.txt,.md,.rvt,.dwg,.dxf,.nwd" hidden />
+        Upload files
+      </label>
+
+      <section class="expectations" aria-labelledby="expectations-heading">
+        <h2 id="expectations-heading">Before you upload</h2>
+
+        <div class="expect-block expect-important">
+          <h3>Large PDFs (e.g. 2,000 pages)</h3>
+          <ul>
+            <li>Indexed <strong>page-by-page in the background</strong> (75+ pages). Wait until indexing finishes before relying on answers.</li>
+            <li>First-time indexing may take <strong>10–30+ minutes</strong> depending on size and API speed.</li>
+            <li>Only the <strong>most relevant sections</strong> are sent to the AI per question — not the entire PDF.</li>
+          </ul>
+        </div>
+
+        <div class="expect-block">
+          <h3>Questions that work well</h3>
+          <ul>
+            <li>By topic: <em>“Fireproofing requirements in Division 7”</em></li>
+            <li>By page: <em>“What does page 842 say about concrete curing?”</em></li>
+            <li>Compare files: <em>“Compare the P6 schedule with the contract PDF milestones.”</em></li>
+          </ul>
+        </div>
+
+        <div class="expect-block expect-warn">
+          <h3>Limitations</h3>
+          <ul>
+            <li><strong>Cannot</strong> summarize every page of a thousand-page set in one answer.</li>
+            <li><strong>Scanned</strong> PDFs (image-only, no text) may index poorly until OCR is added — export searchable PDFs when possible.</li>
+            <li>Revit/DWG uploads are stored; use <strong>IFC or PDF exports</strong> for deeper analysis.</li>
+          </ul>
+        </div>
+
+        <div class="expect-block expect-limits">
+          <h3>Current limits</h3>
+          <ul id="limitsList">
+            <li>Loading limits…</li>
+          </ul>
+        </div>
+      </section>
+
+      <div class="files-section">
+        <h2 class="files-heading">Indexed files</h2>
+        <ul id="fileList" class="file-list"></ul>
+      </div>
+
+      <div id="activeJobs" class="active-jobs" hidden></div>
+      <button type="button" id="clearBtn" class="ghost">Clear index</button>
+    </aside>
+
+    <main class="chat">
+      <div id="noticeBar" class="notice-bar" role="status" hidden></div>
+
+      <div id="messages" class="messages">
+        <div class="msg assistant welcome">
+          <p><strong>Upload documents</strong>, wait for indexing to complete on large PDFs, then ask questions.</p>
+          <p>See <strong>Before you upload</strong> in the sidebar for timing, limits, and what to expect.</p>
+        </div>
+      </div>
+
+      <form id="chatForm" class="composer">
+        <textarea id="question" rows="2" placeholder="Ask by topic or page number (e.g. page 842)…" required></textarea>
+        <button type="submit" id="sendBtn">Send</button>
+      </form>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
