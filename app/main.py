@@ -75,6 +75,7 @@ class ContextLimits(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    version: str
     documents_indexed: int
     data_dir: str
     llm: str
@@ -145,6 +146,7 @@ def health() -> HealthResponse:
     rag = get_rag()
     return HealthResponse(
         status="ok",
+        version=app.version,
         documents_indexed=rag.document_count,
         data_dir=str(settings.data_path),
         llm=settings.openai_model,
