@@ -131,7 +131,7 @@ if STATIC_DIR.exists():
 def chat_ui():
     index = STATIC_DIR / "index.html"
     if index.exists():
-        return FileResponse(index)
+        return FileResponse(index, media_type="text/html")
     return {"message": "UI not found. API is running — see /docs"}
 
 

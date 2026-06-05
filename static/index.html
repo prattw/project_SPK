@@ -4,7 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=0.3.0" />
+  <style>
+    /* Fallback if external CSS is blocked or cached */
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f1115; color: #e8eaed; }
+    .app { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
+    .sidebar { background: #181b22; padding: 1rem; border-right: 1px solid #2a2f3a; }
+    .chat { display: flex; flex-direction: column; min-height: 100vh; }
+    .upload-btn { display: block; text-align: center; padding: 0.65rem; background: #4a9eff; color: #fff; border-radius: 8px; cursor: pointer; font-weight: 600; margin: 0.5rem 0; }
+    .composer { display: flex; gap: 0.5rem; padding: 1rem; border-top: 1px solid #2a2f3a; background: #181b22; }
+    .composer textarea { flex: 1; padding: 0.75rem; border-radius: 8px; border: 1px solid #2a2f3a; background: #0f1115; color: #e8eaed; }
+    .composer button { background: #4a9eff; color: #fff; border: none; border-radius: 8px; padding: 0 1.25rem; font-weight: 600; cursor: pointer; }
+    @media (max-width: 900px) { .app { grid-template-columns: 1fr; } }
+  </style>
 </head>
 <body>
   <div class="app">
@@ -89,6 +101,6 @@
       </form>
     </main>
   </div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=0.3.0"></script>
 </body>
 </html>

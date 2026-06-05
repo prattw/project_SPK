@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Bust Railway Docker layer cache when code changes
 COPY VERSION ./
+# VERSION bumps invalidate cached COPY layers below
 COPY app ./app
 COPY static ./static
 COPY data ./data
