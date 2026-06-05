@@ -13,8 +13,7 @@ Edit `.env`:
 
 | Key | Where to get it |
 |-----|-----------------|
-| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
-| `VOYAGE_API_KEY` | [voyageai.com](https://www.voyageai.com) |
+| `OPENAI_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 
 Optional for local dev: leave `APP_API_KEY` empty.
 
@@ -41,7 +40,7 @@ git push -u origin main
 Follow **[DEPLOY.md](DEPLOY.md)**:
 
 1. New project → deploy from GitHub  
-2. Variables: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `APP_API_KEY` (generate with `openssl rand -hex 32`)  
+2. Variables: `OPENAI_API_KEY`, `APP_API_KEY` (generate with `openssl rand -hex 32`)  
 3. **Volumes:** `/app/chroma_db` and `/app/data`  
 4. Public domain → share URL + access key with your team  
 

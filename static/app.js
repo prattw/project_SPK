@@ -61,8 +61,8 @@ function hideAuthGate() {
 function updateConfigStatus(health) {
   configStatus.hidden = false;
   const issues = [];
-  if (!health.llm_configured) issues.push("Anthropic API key missing on server");
-  if (!health.embeddings_configured) issues.push("Embedding API key missing on server");
+  if (!health.llm_configured) issues.push("OpenAI API key missing on server");
+  if (!health.embeddings_configured) issues.push("OpenAI embedding key missing on server");
 
   if (issues.length) {
     configStatus.className = "config-status warn";

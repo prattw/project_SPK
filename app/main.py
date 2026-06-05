@@ -86,37 +86,30 @@ class HealthResponse(BaseModel):
 
 
 def _require_keys() -> None:
-    if not settings.anthropic_api_key:
+    if not settings.openai_api_key:
         raise HTTPException(
             status_code=503,
-            detail="ANTHROPIC_API_KEY is not configured. Copy .env.example to .env.",
+            detail="OPENAI_API_KEY is not configured. Add it in Railway Variables or .env.",
         )
     provider = settings.embedding_provider.lower()
     if provider == "voyage" and not settings.voyage_api_key:
         raise HTTPException(
             status_code=503,
-            detail="VOYAGE_API_KEY is not configured (recommended for Claude RAG).",
-        )
-    if provider == "openai" and not settings.openai_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="OPENAI_API_KEY is not configured for embeddings.",
+            detail="VOYAGE_API_KEY is not configured (or set EMBEDDING_PROVIDER=openai).",
         )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if not settings.anthropic_api_key:
-        print("Warning: ANTHROPIC_API_KEY not set.")
-    if settings.embedding_provider == "voyage" and not settings.voyage_api_key:
-        print("Warning: VOYAGE_API_KEY not set (get one at voyageai.com).")
+    if not settings.openai_api_key:
+        print("Warning: OPENAI_API_KEY not set — get one at platform.openai.com.")
     yield
 
 
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -154,10 +147,10 @@ def health() -> HealthResponse:
         status="ok",
         documents_indexed=rag.document_count,
         data_dir=str(settings.data_path),
-        llm=settings.anthropic_model,
-        embeddings=f"{settings.embedding_provider}:{settings.voyage_embedding_model if settings.embedding_provider == 'voyage' else settings.openai_embedding_model}",
+        llm=settings.openai_model,
+        embeddings=f"{settings.embedding_provider}:{settings.openai_embedding_model if settings.embedding_provider == 'openai' else settings.voyage_embedding_model}",
         auth_required=bool(settings.app_api_key),
-        llm_configured=bool(settings.anthropic_api_key),
+        llm_configured=bool(settings.openai_api_key),
         embeddings_configured=_embeddings_configured(),
         context_limits=ContextLimits(
             max_upload_mb=settings.max_upload_mb,

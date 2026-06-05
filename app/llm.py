@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import anthropic
+from openai import OpenAI
 
 from app.config import settings
 
@@ -10,21 +10,20 @@ If context is insufficient, say what is missing. Cite source filenames. Be preci
 
 
 def generate_answer(question: str, context: str) -> str:
-    if not settings.anthropic_api_key:
-        raise ValueError("ANTHROPIC_API_KEY is not configured")
+    if not settings.openai_api_key:
+        raise ValueError("OPENAI_API_KEY is not configured")
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    message = client.messages.create(
-        model=settings.anthropic_model,
-        max_tokens=settings.anthropic_max_tokens,
-        system=SYSTEM_PROMPT,
+    client = OpenAI(api_key=settings.openai_api_key)
+    response = client.chat.completions.create(
+        model=settings.openai_model,
+        max_tokens=settings.openai_max_tokens,
         messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": f"Context from uploaded project files:\n\n{context}\n\n---\n\nQuestion: {question}",
-            }
+            },
         ],
         temperature=0.2,
     )
-    parts = [block.text for block in message.content if block.type == "text"]
-    return "\n".join(parts).strip()
+    return (response.choices[0].message.content or "").strip()

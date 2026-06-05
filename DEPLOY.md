@@ -4,7 +4,7 @@
 
 - [Railway](https://railway.app) account
 - GitHub repo with this project (or deploy via Railway CLI)
-- API keys: Anthropic, Voyage (see `.env.example`)
+- API key: OpenAI (see `.env.example`)
 
 ## 1. Push to GitHub
 
@@ -40,10 +40,10 @@ In Railway → **Variables**, add:
 
 | Variable | Required | Notes |
 |----------|----------|--------|
-| `ANTHROPIC_API_KEY` | Yes | Claude answers |
-| `VOYAGE_API_KEY` | Yes | Embeddings |
+| `OPENAI_API_KEY` | Yes | GPT answers + embeddings |
+| `OPENAI_MODEL` | | `gpt-4o-mini` (default) |
 | `APP_API_KEY` | Recommended | Team access key; UI prompts for this |
-| `EMBEDDING_PROVIDER` | | `voyage` (default) |
+| `EMBEDDING_PROVIDER` | | `openai` (default) |
 | `MAX_UPLOAD_MB` | | `300` for large PDFs |
 | `CHROMA_PERSIST_DIR` | | `/app/chroma_db` |
 | `DATA_DIR` | | `/app/data` |
