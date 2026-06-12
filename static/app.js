@@ -233,7 +233,7 @@ function renderMarkdown(text) {
     const line = raw.trimEnd();
     const h = line.match(/^(#{1,4})\s+(.*)$/);
     const ul = line.match(/^\s*[-*]\s+(.*)$/);
-    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const ol = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
 
     if (h) {
       closeList();
@@ -244,7 +244,8 @@ function renderMarkdown(text) {
       out.push(`<li>${inlineMd(ul[1])}</li>`);
     } else if (ol) {
       if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
-      out.push(`<li>${inlineMd(ol[1])}</li>`);
+      // Keep the model's own numbering even when paragraphs split the list.
+      out.push(`<li value="${ol[1]}">${inlineMd(ol[2])}</li>`);
     } else if (!line.trim()) {
       closeList();
     } else {
