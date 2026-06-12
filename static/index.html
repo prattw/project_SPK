@@ -3,114 +3,184 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Project SPK</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.0" />
-  <style>
-    /* Fallback if external CSS is blocked or cached */
-    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0f1115; color: #e8eaed; }
-    .app { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
-    .sidebar { background: #181b22; padding: 1rem; border-right: 1px solid #2a2f3a; }
-    .chat { display: flex; flex-direction: column; min-height: 100vh; }
-    .upload-btn { display: block; text-align: center; padding: 0.65rem; background: #4a9eff; color: #fff; border-radius: 8px; cursor: pointer; font-weight: 600; margin: 0.5rem 0; }
-    .composer { display: flex; gap: 0.5rem; padding: 1rem; border-top: 1px solid #2a2f3a; background: #181b22; }
-    .composer textarea { flex: 1; padding: 0.75rem; border-radius: 8px; border: 1px solid #2a2f3a; background: #0f1115; color: #e8eaed; }
-    .composer button { background: #4a9eff; color: #fff; border: none; border-radius: 8px; padding: 0 1.25rem; font-weight: 600; cursor: pointer; }
-    @media (max-width: 900px) { .app { grid-template-columns: 1fr; } }
-  </style>
+  <title>Project SPK — USACE Policies and Publications AI Assistant</title>
+  <link rel="stylesheet" href="/static/style.css?v=0.5.0" />
 </head>
 <body>
-  <div class="app">
-    <aside class="sidebar">
-      <h1>Project SPK</h1>
-      <p class="tagline">Construction docs · compare · ask</p>
-
-      <div id="authGate" class="auth-gate" hidden>
-        <label for="apiKeyInput">Access key</label>
-        <input type="password" id="apiKeyInput" placeholder="Enter team API key" autocomplete="off" />
-        <button type="button" id="authSaveBtn" class="auth-save">Continue</button>
-        <p class="hint">Required on hosted deployments. Stored for this browser session only.</p>
+  <!-- Top header bar -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22">
+          <path fill="#ffffff" d="M4 21 V5 h3 v3 h3.5 V5 h3 v3 H17 V5 h3 v16 h-5.5 v-4.5 a2.5 2.5 0 0 0 -5 0 V21 Z" />
+        </svg>
       </div>
+      <span class="brand-title">Project SPK &mdash; USACE Policies and Publications AI Assistant</span>
+      <span class="badge" id="versionBadge">BETA</span>
+    </div>
+    <div class="topbar-right">
+      <button type="button" id="aboutBtn" class="pill"><span class="pill-icon">?</span> About</button>
+      <button type="button" id="helpBtn" class="pill"><span class="pill-icon">!</span> Help</button>
+    </div>
+  </header>
 
-      <div id="configStatus" class="config-status" hidden></div>
+  <!-- Secondary tab bar -->
+  <nav class="tabbar">
+    <button type="button" class="tab active" data-view="chat">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 3C6.5 3 2 6.6 2 11c0 2.2 1.1 4.2 3 5.6V21l3.6-2c1.1.3 2.2.4 3.4.4 5.5 0 10-3.6 10-8S17.5 3 12 3z"/></svg>
+      AI Assistant
+    </button>
+    <button type="button" class="tab" data-view="documents">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zm-1 7V3.5L18.5 9z"/></svg>
+      Document List
+    </button>
+    <div class="tabbar-right">
+      <button type="button" id="clearBtn" class="tab-action">Clear Index</button>
+    </div>
+  </nav>
 
-      <label class="upload-btn">
-        <input type="file" id="fileInput" multiple accept=".pdf,.docx,.xlsx,.xer,.xml,.ifc,.gltf,.glb,.txt,.md,.rvt,.dwg,.dxf,.nwd,.msg" hidden />
-        Upload files
-      </label>
+  <div class="layout">
+    <!-- Session history sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <span class="sidebar-title">Session history</span>
+        <div class="sidebar-actions">
+          <button type="button" id="newChatBtn" title="New conversation">+</button>
+          <button type="button" id="sidebarToggle" title="Hide sidebar">&times;</button>
+        </div>
+      </div>
+      <div class="sidebar-search">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
+        <input type="search" id="sessionSearch" placeholder="Search..." autocomplete="off" />
+      </div>
+      <div id="sessionList" class="session-list"></div>
+    </aside>
+    <button type="button" id="sidebarShow" class="sidebar-show" hidden title="Show session history">&#9776;</button>
 
-      <section class="expectations" aria-labelledby="expectations-heading">
-        <h2 id="expectations-heading">Before you upload</h2>
+    <!-- Main content -->
+    <main class="main">
+      <!-- Chat view -->
+      <section id="view-chat" class="view">
+        <div id="configStatus" class="config-status" hidden></div>
+        <div id="noticeBar" class="notice-bar" role="status" hidden></div>
 
-        <div class="expect-block expect-important">
-          <h3>Large PDFs (e.g. 2,000 pages)</h3>
-          <ul>
-            <li>Indexed <strong>page-by-page in the background</strong> (75+ pages). Wait until indexing finishes before relying on answers.</li>
-            <li>First-time indexing may take <strong>10–30+ minutes</strong> depending on size and API speed.</li>
-            <li>Only the <strong>most relevant sections</strong> are sent to the AI per question — not the entire PDF.</li>
-          </ul>
+        <div class="chat-scroll" id="chatScroll">
+          <!-- Welcome screen (hidden once a conversation starts) -->
+          <div id="welcome" class="welcome">
+            <div class="welcome-logo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="34" height="34">
+                <path fill="#c8323b" d="M4 21 V5 h3 v3 h3.5 V5 h3 v3 H17 V5 h3 v16 h-5.5 v-4.5 a2.5 2.5 0 0 0 -5 0 V21 Z" />
+              </svg>
+            </div>
+            <h1 class="welcome-title">USACE Policies and Publications AI Agent</h1>
+            <p class="welcome-desc">
+              Ask me about any USACE policies and publications including all
+              Engineer Regulations (ER), Engineer Manuals (EM), Engineering
+              Construction Bulletins (ECB), Engineer Circulars (EC), Engineer
+              Technical Letters (ETL), Engineer Pamphlets (EP), Unified Facilities
+              Criteria (UFC), Unified Facilities Guide Specifications (UFGS), as well
+              as Army Regulations (AR) and Army Pamphlets (PAM)
+            </p>
+            <div class="prompt-grid" id="promptGrid">
+              <button type="button" class="prompt-card">What are the USACE policy and publication types, purposes, and hierarchy? Please provide a list in the PAL library with a count of each and total, and sort by most to least.</button>
+              <button type="button" class="prompt-card">What USACE publications pertain to Cost Engineering?</button>
+              <button type="button" class="prompt-card">Do Civil Works projects require the use of UFC criteria and UFGS guide specifications?</button>
+              <button type="button" class="prompt-card">What are the key differences between cost engineering requirements for Civil Works versus Military Programs?</button>
+              <button type="button" class="prompt-card">What are the policies pertaining to SCIFs?</button>
+              <button type="button" class="prompt-card">What are the document naming and numbering standards for USACE regulations and policies? List all document series codes and provide examples.</button>
+            </div>
+          </div>
+
+          <div id="messages" class="messages"></div>
         </div>
 
-        <div class="expect-block">
-          <h3>Questions that work well</h3>
-          <ul>
-            <li>By topic: <em>“Fireproofing requirements in Division 7”</em></li>
-            <li>By page: <em>“What does page 842 say about concrete curing?”</em></li>
-            <li>Compare files: <em>“Compare the P6 schedule with the contract PDF milestones.”</em></li>
-          </ul>
-        </div>
-
-        <div class="expect-block expect-warn">
-          <h3>Limitations</h3>
-          <ul>
-            <li><strong>Cannot</strong> summarize every page of a thousand-page set in one answer.</li>
-            <li><strong>Scanned</strong> PDFs (image-only, no text) may index poorly until OCR is added — export searchable PDFs when possible.</li>
-            <li>Revit/DWG uploads are stored; use <strong>IFC or PDF exports</strong> for deeper analysis.</li>
-          </ul>
-        </div>
-
-        <div class="expect-block expect-limits">
-          <h3>Current limits</h3>
-          <ul id="limitsList">
-            <li>Loading limits…</li>
-          </ul>
-        </div>
-
-        <div class="expect-block">
-          <h3>Official USACE libraries</h3>
-          <ul>
-            <li><a href="https://www.publications.usace.army.mil/" target="_blank" rel="noopener">USACE Publications</a> — ERs, EMs, EPs, ECs</li>
-            <li><a href="https://www.usace.army.mil/Resources/Library/" target="_blank" rel="noopener">USACE Library</a> &amp; <a href="https://www.usace.army.mil/Resources/Library/Library-Program/" target="_blank" rel="noopener">Library Program</a></li>
-            <li><a href="https://www.erdc.usace.army.mil/Library.aspx" target="_blank" rel="noopener">ERDC Library</a> — research reports</li>
-            <li><a href="https://geospatial-usace.opendata.arcgis.com/" target="_blank" rel="noopener">USACE Geospatial Open Data</a></li>
-          </ul>
-        </div>
+        <!-- Composer -->
+        <form id="chatForm" class="composer-wrap">
+          <div class="composer">
+            <label class="composer-add" title="Upload documents">
+              <input type="file" id="fileInput" multiple accept=".pdf,.docx,.xlsx,.xer,.xml,.ifc,.gltf,.glb,.txt,.md,.rvt,.dwg,.dxf,.nwd,.msg" hidden />
+              +
+            </label>
+            <textarea id="question" rows="1" placeholder="Ask me anything about USACE policies and publications..." required></textarea>
+            <button type="submit" id="sendBtn" class="composer-send" title="Send">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+            </button>
+          </div>
+          <p class="composer-hint">Upload files with the + button. Large PDFs index in the background &mdash; see Help for details.</p>
+        </form>
       </section>
 
-      <div class="files-section">
-        <h2 class="files-heading">Indexed files</h2>
-        <ul id="fileList" class="file-list"></ul>
-      </div>
-
-      <div id="activeJobs" class="active-jobs" hidden></div>
-      <button type="button" id="clearBtn" class="ghost">Clear index</button>
-    </aside>
-
-    <main class="chat">
-      <div id="noticeBar" class="notice-bar" role="status" hidden></div>
-
-      <div id="messages" class="messages">
-        <div class="msg assistant welcome">
-          <p><strong>Upload documents</strong>, wait for indexing to complete on large PDFs, then ask questions.</p>
-          <p>See <strong>Before you upload</strong> in the sidebar for timing, limits, and what to expect.</p>
+      <!-- Documents view -->
+      <section id="view-documents" class="view" hidden>
+        <div class="docs-panel">
+          <div class="docs-head">
+            <h2>Indexed documents</h2>
+            <label class="upload-btn">
+              <input type="file" id="fileInputDocs" multiple accept=".pdf,.docx,.xlsx,.xer,.xml,.ifc,.gltf,.glb,.txt,.md,.rvt,.dwg,.dxf,.nwd,.msg" hidden />
+              Upload files
+            </label>
+          </div>
+          <div id="activeJobs" class="active-jobs" hidden></div>
+          <ul id="fileList" class="file-list"></ul>
         </div>
-      </div>
-
-      <form id="chatForm" class="composer">
-        <textarea id="question" rows="2" placeholder="Ask by topic or page number (e.g. page 842)…" required></textarea>
-        <button type="submit" id="sendBtn">Send</button>
-      </form>
+      </section>
     </main>
   </div>
-  <script src="/static/app.js?v=0.3.0"></script>
+
+  <!-- Access key overlay -->
+  <div id="authGate" class="overlay" hidden>
+    <div class="modal auth-modal">
+      <h2>Access key required</h2>
+      <p>This deployment is protected. Enter your team access key to continue. It is stored for this browser session only.</p>
+      <input type="password" id="apiKeyInput" placeholder="Enter team API key" autocomplete="off" />
+      <button type="button" id="authSaveBtn" class="primary">Continue</button>
+    </div>
+  </div>
+
+  <!-- About modal -->
+  <div id="aboutModal" class="overlay" hidden>
+    <div class="modal">
+      <button type="button" class="modal-close" data-close>&times;</button>
+      <h2>About Project SPK</h2>
+      <p>Project SPK is a retrieval-augmented AI assistant for USACE construction documents. Upload PDFs, schedules, models, and office documents, then ask questions grounded in your library.</p>
+      <h3>Official USACE libraries</h3>
+      <ul>
+        <li><a href="https://www.publications.usace.army.mil/" target="_blank" rel="noopener">USACE Publications</a> &mdash; ERs, EMs, EPs, ECs</li>
+        <li><a href="https://www.usace.army.mil/Resources/Library/" target="_blank" rel="noopener">USACE Library</a> &amp; <a href="https://www.usace.army.mil/Resources/Library/Library-Program/" target="_blank" rel="noopener">Library Program</a></li>
+        <li><a href="https://www.erdc.usace.army.mil/Library.aspx" target="_blank" rel="noopener">ERDC Library</a> &mdash; research reports</li>
+        <li><a href="https://geospatial-usace.opendata.arcgis.com/" target="_blank" rel="noopener">USACE Geospatial Open Data</a></li>
+      </ul>
+      <h3>Current limits</h3>
+      <ul id="limitsList"><li>Loading limits&hellip;</li></ul>
+    </div>
+  </div>
+
+  <!-- Help modal -->
+  <div id="helpModal" class="overlay" hidden>
+    <div class="modal">
+      <button type="button" class="modal-close" data-close>&times;</button>
+      <h2>Help &mdash; what to expect</h2>
+      <h3>Large PDFs (e.g. 2,000 pages)</h3>
+      <ul>
+        <li>Indexed <strong>page-by-page in the background</strong> (75+ pages). Wait until indexing finishes before relying on answers.</li>
+        <li>First-time indexing may take <strong>10&ndash;30+ minutes</strong> depending on size and API speed.</li>
+        <li>Only the <strong>most relevant sections</strong> are sent to the AI per question &mdash; not the entire PDF.</li>
+      </ul>
+      <h3>Questions that work well</h3>
+      <ul>
+        <li>By topic: <em>&ldquo;Fireproofing requirements in Division 7&rdquo;</em></li>
+        <li>By page: <em>&ldquo;What does page 842 say about concrete curing?&rdquo;</em></li>
+        <li>Compare files: <em>&ldquo;Compare the P6 schedule with the contract PDF milestones.&rdquo;</em></li>
+      </ul>
+      <h3>Limitations</h3>
+      <ul>
+        <li><strong>Cannot</strong> summarize every page of a thousand-page set in one answer.</li>
+        <li><strong>Scanned</strong> PDFs (image-only, no text) may index poorly until OCR is added &mdash; export searchable PDFs when possible.</li>
+        <li>Revit/DWG uploads are stored; use <strong>IFC or PDF exports</strong> for deeper analysis.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=0.5.0"></script>
 </body>
 </html>

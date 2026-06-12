@@ -1,8 +1,12 @@
 const API_KEY_STORAGE = "spk_api_key";
+const SESSIONS_STORAGE = "spk_sessions";
 
 const messagesEl = document.getElementById("messages");
+const chatScroll = document.getElementById("chatScroll");
+const welcomeEl = document.getElementById("welcome");
 const fileListEl = document.getElementById("fileList");
 const fileInput = document.getElementById("fileInput");
+const fileInputDocs = document.getElementById("fileInputDocs");
 const chatForm = document.getElementById("chatForm");
 const questionEl = document.getElementById("question");
 const sendBtn = document.getElementById("sendBtn");
@@ -14,8 +18,22 @@ const authGate = document.getElementById("authGate");
 const apiKeyInput = document.getElementById("apiKeyInput");
 const authSaveBtn = document.getElementById("authSaveBtn");
 const configStatus = document.getElementById("configStatus");
+const versionBadge = document.getElementById("versionBadge");
+const sessionListEl = document.getElementById("sessionList");
+const sessionSearch = document.getElementById("sessionSearch");
+const newChatBtn = document.getElementById("newChatBtn");
+const sidebar = document.getElementById("sidebar");
+const sidebarToggle = document.getElementById("sidebarToggle");
+const sidebarShow = document.getElementById("sidebarShow");
+const promptGrid = document.getElementById("promptGrid");
+const aboutBtn = document.getElementById("aboutBtn");
+const helpBtn = document.getElementById("helpBtn");
+const aboutModal = document.getElementById("aboutModal");
+const helpModal = document.getElementById("helpModal");
 
 let authRequired = false;
+
+/* ---------- API key handling ---------- */
 
 function getApiKey() {
   return sessionStorage.getItem(API_KEY_STORAGE) || "";
@@ -48,34 +66,147 @@ async function apiFetch(url, options = {}) {
 
 function showAuthGate() {
   authGate.hidden = false;
-  fileInput.disabled = true;
-  sendBtn.disabled = true;
+  apiKeyInput.focus();
 }
 
 function hideAuthGate() {
   authGate.hidden = true;
-  fileInput.disabled = false;
-  sendBtn.disabled = false;
 }
 
-function updateConfigStatus(health) {
-  configStatus.hidden = false;
-  const issues = [];
-  if (!health.llm_configured) issues.push("OpenAI API key missing on server");
-  if (!health.embeddings_configured) issues.push("OpenAI embedding key missing on server");
+/* ---------- Session history (stored in this browser) ---------- */
 
-  if (issues.length) {
-    configStatus.className = "config-status warn";
-    configStatus.textContent =
-      "Server not fully configured — uploads and chat will fail until API keys are set. " +
-      issues.join(". ");
-    return;
+let sessions = loadSessions();
+let currentSessionId = null;
+
+function loadSessions() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSIONS_STORAGE)) || [];
+  } catch {
+    return [];
   }
-  configStatus.className = "config-status ok";
-  configStatus.textContent = "Server ready for uploads and chat.";
 }
 
-function addMessage(role, text, sources = []) {
+function saveSessions() {
+  // Keep the most recent 50 sessions to stay within localStorage limits.
+  sessions.sort((a, b) => b.updated - a.updated);
+  sessions = sessions.slice(0, 50);
+  try {
+    localStorage.setItem(SESSIONS_STORAGE, JSON.stringify(sessions));
+  } catch {
+    /* storage full — drop oldest and retry once */
+    sessions = sessions.slice(0, 10);
+    try { localStorage.setItem(SESSIONS_STORAGE, JSON.stringify(sessions)); } catch {}
+  }
+}
+
+function currentSession() {
+  return sessions.find((s) => s.id === currentSessionId) || null;
+}
+
+function ensureSession() {
+  let s = currentSession();
+  if (s) return s;
+  s = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    title: "New conversation",
+    created: Date.now(),
+    updated: Date.now(),
+    messages: [],
+  };
+  sessions.unshift(s);
+  currentSessionId = s.id;
+  return s;
+}
+
+function newConversation() {
+  currentSessionId = null;
+  messagesEl.innerHTML = "";
+  welcomeEl.hidden = false;
+  hideNotice();
+  renderSessionList();
+}
+
+function openSession(id) {
+  const s = sessions.find((x) => x.id === id);
+  if (!s) return;
+  currentSessionId = id;
+  messagesEl.innerHTML = "";
+  welcomeEl.hidden = s.messages.length > 0;
+  s.messages.forEach((m) => renderMessage(m.role, m.text, m.sources || []));
+  showView("chat");
+  renderSessionList();
+  chatScroll.scrollTop = chatScroll.scrollHeight;
+}
+
+function sessionGroupLabel(updated) {
+  const days = (Date.now() - updated) / 86400000;
+  if (days <= 7) return "Recent";
+  if (days <= 30) return "Past 30 Days";
+  return "Older";
+}
+
+function formatSessionTime(ts) {
+  const d = new Date(ts);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  if (sameDay) {
+    return "Today at " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function renderSessionList() {
+  const filter = (sessionSearch.value || "").trim().toLowerCase();
+  sessionListEl.innerHTML = "";
+  const ordered = [...sessions].sort((a, b) => b.updated - a.updated);
+  let lastGroup = null;
+
+  ordered.forEach((s) => {
+    if (filter && !s.title.toLowerCase().includes(filter)) return;
+    const group = sessionGroupLabel(s.updated);
+    if (group !== lastGroup) {
+      const g = document.createElement("div");
+      g.className = "session-group";
+      g.textContent = group;
+      sessionListEl.appendChild(g);
+      lastGroup = group;
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "session-item" + (s.id === currentSessionId ? " active" : "");
+    btn.innerHTML = `<span class="dot"></span><span class="label"></span>`;
+    btn.querySelector(".label").textContent = s.title;
+    btn.title = `${s.title}\n${formatSessionTime(s.updated)}`;
+    btn.addEventListener("click", () => openSession(s.id));
+    sessionListEl.appendChild(btn);
+  });
+
+  if (!sessionListEl.children.length) {
+    const empty = document.createElement("div");
+    empty.className = "session-group";
+    empty.textContent = filter ? "No matching conversations" : "No conversations yet";
+    sessionListEl.appendChild(empty);
+  }
+}
+
+/* ---------- Views (tabs) ---------- */
+
+function showView(name) {
+  document.querySelectorAll(".tab[data-view]").forEach((t) => {
+    t.classList.toggle("active", t.dataset.view === name);
+  });
+  document.getElementById("view-chat").hidden = name !== "chat";
+  document.getElementById("view-documents").hidden = name !== "documents";
+  if (name === "documents") refreshFiles();
+}
+
+document.querySelectorAll(".tab[data-view]").forEach((t) => {
+  t.addEventListener("click", () => showView(t.dataset.view));
+});
+
+/* ---------- Messages ---------- */
+
+function renderMessage(role, text, sources = []) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   const p = document.createElement("p");
@@ -88,7 +219,21 @@ function addMessage(role, text, sources = []) {
     div.appendChild(s);
   }
   messagesEl.appendChild(div);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  chatScroll.scrollTop = chatScroll.scrollHeight;
+}
+
+function addMessage(role, text, sources = []) {
+  welcomeEl.hidden = true;
+  renderMessage(role, text, sources);
+
+  const s = ensureSession();
+  s.messages.push({ role, text, sources });
+  if (role === "user" && s.title === "New conversation") {
+    s.title = text.length > 60 ? text.slice(0, 57) + "..." : text;
+  }
+  s.updated = Date.now();
+  saveSessions();
+  renderSessionList();
 }
 
 function showNotice(text, type = "info") {
@@ -102,31 +247,34 @@ function hideNotice() {
   noticeBar.textContent = "";
 }
 
-function showActiveJob(filename, pagesDone, pagesTotal) {
-  activeJobsEl.hidden = false;
-  const pct = pagesTotal ? Math.round((pagesDone / pagesTotal) * 100) : 0;
-  activeJobsEl.innerHTML = `
-    <strong>Indexing</strong> ${filename}<br />
-    ${pagesDone.toLocaleString()} / ${pagesTotal.toLocaleString()} pages (${pct}%)
-  `;
-}
-
-function hideActiveJob() {
-  activeJobsEl.hidden = true;
-  activeJobsEl.innerHTML = "";
-}
-
 function showWarnings(warnings, context = "Upload") {
   if (!warnings?.length) return;
   const text = warnings.join(" ");
   addMessage("notice", `${context}: ${text}`);
-  showNotice(`${context} notice: ${text}`, "info");
 }
 
 function setLoading(on) {
-  if (authRequired && !getApiKey()) return;
   sendBtn.disabled = on;
   fileInput.disabled = on;
+  fileInputDocs.disabled = on;
+}
+
+/* ---------- Server status / limits ---------- */
+
+function updateConfigStatus(health) {
+  const issues = [];
+  if (!health.llm_configured) issues.push("OpenAI API key missing on server");
+  if (!health.embeddings_configured) issues.push("OpenAI embedding key missing on server");
+
+  if (issues.length) {
+    configStatus.hidden = false;
+    configStatus.className = "config-status warn";
+    configStatus.textContent =
+      "Server not fully configured — uploads and chat will fail until API keys are set. " +
+      issues.join(". ");
+    return;
+  }
+  configStatus.hidden = true;
 }
 
 async function loadLimits() {
@@ -137,12 +285,10 @@ async function loadLimits() {
 
     authRequired = data.auth_required;
     updateConfigStatus(data);
+    if (data.version) versionBadge.textContent = `BETA v${data.version}`;
 
-    if (authRequired && !getApiKey()) {
-      showAuthGate();
-    } else {
-      hideAuthGate();
-    }
+    if (authRequired && !getApiKey()) showAuthGate();
+    else hideAuthGate();
 
     const L = data.context_limits;
     const ctxK = Math.round(L.max_context_chars / 1000);
@@ -159,20 +305,40 @@ async function loadLimits() {
   }
 }
 
+/* ---------- Files / indexing ---------- */
+
 async function refreshFiles() {
   if (authRequired && !getApiKey()) return;
-  const res = await apiFetch("/files");
-  const data = await res.json();
-  fileListEl.innerHTML = "";
-  if (!data.files.length) {
-    fileListEl.innerHTML = "<li>No files indexed yet</li>";
-    return;
+  try {
+    const res = await apiFetch("/files");
+    const data = await res.json();
+    fileListEl.innerHTML = "";
+    if (!data.files.length) {
+      fileListEl.innerHTML = "<li>No files indexed yet — upload documents to get started.</li>";
+      return;
+    }
+    data.files.forEach((name) => {
+      const li = document.createElement("li");
+      li.textContent = name;
+      fileListEl.appendChild(li);
+    });
+  } catch {
+    /* auth gate already shown by apiFetch */
   }
-  data.files.forEach((name) => {
-    const li = document.createElement("li");
-    li.textContent = name;
-    fileListEl.appendChild(li);
-  });
+}
+
+function showActiveJob(filename, pagesDone, pagesTotal) {
+  activeJobsEl.hidden = false;
+  const pct = pagesTotal ? Math.round((pagesDone / pagesTotal) * 100) : 0;
+  activeJobsEl.innerHTML = `
+    <strong>Indexing</strong> ${filename}<br />
+    ${pagesDone.toLocaleString()} / ${pagesTotal.toLocaleString()} pages (${pct}%)
+  `;
+}
+
+function hideActiveJob() {
+  activeJobsEl.hidden = true;
+  activeJobsEl.innerHTML = "";
 }
 
 async function pollJob(jobId, filename, pagesTotal) {
@@ -211,6 +377,7 @@ async function pollJob(jobId, filename, pagesTotal) {
     hideNotice();
     addMessage("error", job.message || `${filename}: indexing failed.`);
     showNotice(job.message || "Indexing failed.", "error");
+    return;
   }
 }
 
@@ -241,42 +408,34 @@ async function uploadFiles(files) {
   await refreshFiles();
 }
 
-authSaveBtn.addEventListener("click", async () => {
-  const key = apiKeyInput.value.trim();
-  if (!key) return;
-  setApiKey(key);
-  apiKeyInput.value = "";
-  hideAuthGate();
-  await loadLimits();
-  await refreshFiles();
-});
-
-fileInput.addEventListener("change", async () => {
-  if (!fileInput.files.length) return;
+async function handleFileInput(input) {
+  if (!input.files.length) return;
   if (authRequired && !getApiKey()) {
     showAuthGate();
     return;
   }
+  showView("chat");
   setLoading(true);
   try {
-    await uploadFiles(fileInput.files);
+    await uploadFiles(input.files);
   } finally {
-    fileInput.value = "";
+    input.value = "";
     setLoading(false);
   }
-});
+}
 
-chatForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const question = questionEl.value.trim();
-  if (!question) return;
+fileInput.addEventListener("change", () => handleFileInput(fileInput));
+fileInputDocs.addEventListener("change", () => handleFileInput(fileInputDocs));
+
+/* ---------- Chat ---------- */
+
+async function askQuestion(question) {
   if (authRequired && !getApiKey()) {
     showAuthGate();
     return;
   }
 
   addMessage("user", question);
-  questionEl.value = "";
   setLoading(true);
   hideNotice();
 
@@ -298,7 +457,92 @@ chatForm.addEventListener("submit", async (e) => {
   } finally {
     setLoading(false);
   }
+}
+
+chatForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const question = questionEl.value.trim();
+  if (!question) return;
+  questionEl.value = "";
+  questionEl.style.height = "auto";
+  askQuestion(question);
 });
+
+questionEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    chatForm.requestSubmit();
+  }
+});
+
+questionEl.addEventListener("input", () => {
+  questionEl.style.height = "auto";
+  questionEl.style.height = Math.min(questionEl.scrollHeight, 140) + "px";
+});
+
+promptGrid.addEventListener("click", (e) => {
+  const card = e.target.closest(".prompt-card");
+  if (!card) return;
+  askQuestion(card.textContent.trim());
+});
+
+/* ---------- Sidebar ---------- */
+
+newChatBtn.addEventListener("click", () => {
+  newConversation();
+  showView("chat");
+});
+
+sessionSearch.addEventListener("input", renderSessionList);
+
+sidebarToggle.addEventListener("click", () => {
+  sidebar.hidden = true;
+  sidebarShow.hidden = false;
+});
+
+sidebarShow.addEventListener("click", () => {
+  sidebar.hidden = false;
+  sidebarShow.hidden = true;
+});
+
+/* ---------- Modals ---------- */
+
+function openModal(modal) { modal.hidden = false; }
+function closeModal(modal) { modal.hidden = true; }
+
+aboutBtn.addEventListener("click", () => openModal(aboutModal));
+helpBtn.addEventListener("click", () => openModal(helpModal));
+
+[aboutModal, helpModal].forEach((modal) => {
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal || e.target.closest("[data-close]")) closeModal(modal);
+  });
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeModal(aboutModal);
+    closeModal(helpModal);
+  }
+});
+
+/* ---------- Auth gate ---------- */
+
+authSaveBtn.addEventListener("click", async () => {
+  const key = apiKeyInput.value.trim();
+  if (!key) return;
+  setApiKey(key);
+  apiKeyInput.value = "";
+  hideAuthGate();
+  await loadLimits();
+  await refreshFiles();
+});
+
+apiKeyInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") authSaveBtn.click();
+});
+
+/* ---------- Clear index ---------- */
 
 clearBtn.addEventListener("click", async () => {
   if (!confirm("Clear all indexed documents?")) return;
@@ -313,4 +557,7 @@ clearBtn.addEventListener("click", async () => {
   }
 });
 
+/* ---------- Init ---------- */
+
+renderSessionList();
 loadLimits().then(() => refreshFiles());
