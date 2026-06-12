@@ -11,7 +11,7 @@ from chromadb.api.models.Collection import Collection
 from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
 from app.embeddings import embed_query, embed_texts
-from app.llm import generate_answer
+from app.llm import generate_answer, generate_general_answer
 
 PAGE_REF_PATTERN = re.compile(
     r"\b(?:page|pg|p)\s*\.?\s*(\d{1,5})\b",
@@ -321,19 +321,26 @@ class RAGService:
     def query(self, question: str, top_k: int | None = None) -> dict[str, Any]:
         if self.document_count == 0:
             return {
-                "answer": "Upload construction documents (PDF, P6 XER, IFC, etc.) and I can analyze or compare them.",
+                "answer": generate_general_answer(question),
                 "sources": [],
                 "chunks_used": 0,
-                "context_warnings": [],
+                "context_warnings": [
+                    "No documents are indexed yet — this answer comes from the AI's "
+                    "general knowledge, not your document library. Upload documents "
+                    "for grounded, citable answers."
+                ],
             }
 
         candidates = self.retrieve(question, top_k=top_k)
         if not candidates:
             return {
-                "answer": "I could not find relevant context in your uploaded files for that question.",
+                "answer": generate_general_answer(question),
                 "sources": [],
                 "chunks_used": 0,
-                "context_warnings": [],
+                "context_warnings": [
+                    "No relevant sections were found in your uploaded files — this "
+                    "answer comes from the AI's general knowledge instead."
+                ],
             }
 
         context, selected, pack_warnings = pack_chunks_for_llm(candidates)

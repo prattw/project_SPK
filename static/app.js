@@ -206,12 +206,69 @@ document.querySelectorAll(".tab[data-view]").forEach((t) => {
 
 /* ---------- Messages ---------- */
 
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function inlineMd(s) {
+  return s
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|\s)\*([^*\n]+)\*(?=\s|[.,;:!?)]|$)/g, "$1<em>$2</em>")
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>");
+}
+
+function renderMarkdown(text) {
+  const lines = escapeHtml(text).split("\n");
+  const out = [];
+  let list = null; // "ul" | "ol" | null
+
+  const closeList = () => {
+    if (list) {
+      out.push(`</${list}>`);
+      list = null;
+    }
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    const ul = line.match(/^\s*[-*]\s+(.*)$/);
+    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+
+    if (h) {
+      closeList();
+      const level = Math.min(h[1].length + 2, 5);
+      out.push(`<h${level}>${inlineMd(h[2])}</h${level}>`);
+    } else if (ul) {
+      if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; }
+      out.push(`<li>${inlineMd(ul[1])}</li>`);
+    } else if (ol) {
+      if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
+      out.push(`<li>${inlineMd(ol[1])}</li>`);
+    } else if (!line.trim()) {
+      closeList();
+    } else {
+      closeList();
+      out.push(`<p>${inlineMd(line)}</p>`);
+    }
+  }
+  closeList();
+  return out.join("");
+}
+
 function renderMessage(role, text, sources = []) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
-  const p = document.createElement("p");
-  p.textContent = text;
-  div.appendChild(p);
+  if (role === "assistant") {
+    const md = document.createElement("div");
+    md.className = "md";
+    md.innerHTML = renderMarkdown(text);
+    div.appendChild(md);
+  } else {
+    const p = document.createElement("p");
+    p.textContent = text;
+    div.appendChild(p);
+  }
   if (sources.length) {
     const s = document.createElement("div");
     s.className = "sources";
