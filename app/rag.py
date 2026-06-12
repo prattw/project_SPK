@@ -114,7 +114,11 @@ class RAGService:
         records, warnings = cap_chunk_records(records, source)
         return self._upsert_batch(source, records), warnings
 
-    def ingest_documents(self, documents: list[dict[str, str]]) -> tuple[int, list[str]]:
+    def ingest_documents(
+        self,
+        documents: list[dict[str, Any]],
+        extra_meta: dict[str, str] | None = None,
+    ) -> tuple[int, list[str]]:
         warnings: list[str] = []
         total = 0
 
@@ -131,8 +135,9 @@ class RAGService:
             capped, chunk_warnings = cap_chunks(raw_chunks, source)
             warnings.extend(chunk_warnings)
 
+            base_meta = dict(extra_meta or {})
             records = [
-                (text, {"source": source, "chunk_index": i})
+                (text, {**base_meta, "source": source, "chunk_index": i})
                 for i, text in enumerate(capped)
             ]
             count, upsert_warnings = self._upsert_records(source, records)
@@ -148,9 +153,11 @@ class RAGService:
         pages_total: int,
         progress_callback: Callable[[int, int], None] | None = None,
         initial_warnings: list[str] | None = None,
+        extra_meta: dict[str, str] | None = None,
     ) -> tuple[int, list[str], int]:
         """Index a PDF page-by-page (optimized for 2000+ page specs)."""
         warnings: list[str] = list(initial_warnings or [])
+        base_meta = dict(extra_meta or {})
         pending: list[tuple[str, dict[str, Any]]] = []
         pages_indexed = 0
         total_chunks = 0
@@ -192,6 +199,7 @@ class RAGService:
                     (
                         chunk,
                         {
+                            **base_meta,
                             "source": source,
                             "page_start": page_num,
                             "page_end": page_num,
@@ -288,6 +296,8 @@ class RAGService:
                         "source": m.get("source", "unknown"),
                         "page_start": m.get("page_start"),
                         "page_end": m.get("page_end"),
+                        "doc_number": m.get("doc_number"),
+                        "doc_type": m.get("doc_type"),
                         "score": 1 - distance if distance is not None else None,
                     }
                 )

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.config import settings
+from app.doc_metadata import infer_doc_metadata
 from app.parsers.loaders import SUPPORTED_EXTENSIONS, STORE_ONLY_EXTENSIONS, load_document
 from app.pdf_ingest import count_pdf_pages, iter_pdf_pages, should_index_in_background
 from app.rag import get_rag
@@ -37,6 +38,7 @@ def ingest_path(
     source = source_name or path.name
     rag = get_rag()
     rag.delete_source(source)
+    doc_meta = infer_doc_metadata(source)
 
     if suffix == ".pdf":
         page_iter, pages_total, pdf_warnings = iter_pdf_pages(path)
@@ -46,6 +48,7 @@ def ingest_path(
             pages_total,
             progress_callback=progress_callback,
             initial_warnings=pdf_warnings,
+            extra_meta=doc_meta,
         )
         message = (
             f"Indexed {pages_indexed:,} pages ({count:,} chunks) from {source}."
@@ -69,7 +72,9 @@ def ingest_path(
             "warnings": [],
         }
 
-    count, warnings = rag.ingest_documents([{"source": source, "text": text}])
+    count, warnings = rag.ingest_documents(
+        [{"source": source, "text": text}], extra_meta=doc_meta
+    )
     message = "File indexed successfully."
     if warnings:
         message += " " + " ".join(warnings)

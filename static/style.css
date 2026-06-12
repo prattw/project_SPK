@@ -157,6 +157,8 @@ body {
 .expect-block li { margin-bottom: 0.35rem; }
 .expect-block li:last-child { margin-bottom: 0; }
 .expect-block strong { color: var(--text); font-weight: 600; }
+.expect-block a { color: var(--accent); text-decoration: none; }
+.expect-block a:hover { text-decoration: underline; }
 
 .expect-important {
   background: var(--important-bg);

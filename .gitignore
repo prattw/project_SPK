@@ -11,6 +11,10 @@ data/*
 !data/.gitkeep
 chroma_db/
 
+# Source documents and generated catalogs — never commit to the public repo
+DOCUMENTS for RAG/
+catalog/
+
 # IDE / OS
 .idea/
 .vscode/

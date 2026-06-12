@@ -58,15 +58,18 @@ def cap_chunk_records(
 
 def format_chunk_for_prompt(chunk: dict) -> str:
     source = chunk.get("source", "unknown")
+    doc_number = chunk.get("doc_number")
+    name = f"{doc_number} — {source}" if doc_number else source
+
     page_start = chunk.get("page_start")
     page_end = chunk.get("page_end")
     if page_start is not None:
         if page_end and page_end != page_start:
-            label = f"{source} (pages {page_start}–{page_end})"
+            label = f"{name} (pages {page_start}–{page_end})"
         else:
-            label = f"{source} (page {page_start})"
+            label = f"{name} (page {page_start})"
     else:
-        label = source
+        label = name
     return f"[{label}]\n{chunk['text']}"
 
 

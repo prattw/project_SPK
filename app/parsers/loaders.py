@@ -13,6 +13,8 @@ SUPPORTED_EXTENSIONS = {
     ".txt",
     ".md",
     ".pdf",
+    ".docx",
+    ".xlsx",
     ".xer",
     ".xml",
     ".ifc",
@@ -29,6 +31,10 @@ BINARY_EXTENSIONS = {
     ".fbx",
     ".obj",
     ".3dm",
+    ".msg",
+    ".jpg",
+    ".jpeg",
+    ".png",
 }
 
 # Accepted for upload; indexed with a placeholder summary until converted.
@@ -50,6 +56,43 @@ def load_pdf(path: Path) -> str:
             break
         page_texts.append(page.extract_text() or "")
     return "\n\n".join(page_texts).strip()
+
+
+def load_docx(path: Path) -> str:
+    from docx import Document
+
+    doc = Document(str(path))
+    parts: list[str] = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            parts.append(text)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            line = " | ".join(c for c in cells if c)
+            if line:
+                parts.append(line)
+    return "\n".join(parts)
+
+
+def load_xlsx(path: Path) -> str:
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(path), read_only=True, data_only=True)
+    parts: list[str] = [f"Spreadsheet: {path.name}"]
+    max_rows_per_sheet = 1000
+    for ws in wb.worksheets:
+        parts.append(f"\n## Sheet: {ws.title}")
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i >= max_rows_per_sheet:
+                parts.append(f"... (rows beyond {max_rows_per_sheet} omitted)")
+                break
+            cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    wb.close()
+    return "\n".join(parts)
 
 
 def load_xer(path: Path) -> str:
@@ -183,6 +226,10 @@ def load_binary_placeholder(path: Path) -> str:
         ".rvt": "Export IFC or PDF sheets from Revit for full analysis.",
         ".dwg": "Export PDF or DXF with readable layers for analysis.",
         ".dxf": "Text extraction limited; prefer PDF export for drawings.",
+        ".msg": "Outlook message stored; save the email as PDF for full-text search.",
+        ".jpg": "Image stored; no OCR yet — upload a searchable PDF for text Q&A.",
+        ".jpeg": "Image stored; no OCR yet — upload a searchable PDF for text Q&A.",
+        ".png": "Image stored; no OCR yet — upload a searchable PDF for text Q&A.",
     }
     hint = hints.get(ext, "Export PDF, IFC, or schedule XER for best results.")
     return (
@@ -199,6 +246,10 @@ def load_document(path: Path) -> str | None:
         return load_text_file(path)
     if suffix == ".pdf":
         return load_pdf(path)
+    if suffix == ".docx":
+        return load_docx(path)
+    if suffix == ".xlsx":
+        return load_xlsx(path)
     if suffix == ".xer":
         return load_xer(path)
     if suffix == ".xml":
