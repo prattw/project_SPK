@@ -47,11 +47,9 @@ body {
 .logo {
   width: 34px;
   height: 34px;
-  border-radius: 4px;
-  background: var(--usace-red);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  border-radius: 50%;
+  object-fit: contain;
+  background: #fff;
   flex-shrink: 0;
 }
 
@@ -315,8 +313,11 @@ body {
 .welcome[hidden] { display: none; }
 
 .welcome-logo {
-  display: inline-flex;
-  margin-bottom: 0.75rem;
+  display: inline-block;
+  width: auto;
+  height: 96px;
+  max-width: 100%;
+  margin-bottom: 1rem;
 }
 
 .welcome-title {

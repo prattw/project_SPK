@@ -4,17 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.5.2" />
+  <link rel="stylesheet" href="/static/style.css?v=0.5.3" />
 </head>
 <body>
   <!-- Top header bar -->
   <header class="topbar">
     <div class="brand">
-      <div class="logo" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="22" height="22">
-          <path fill="#ffffff" d="M4 21 V5 h3 v3 h3.5 V5 h3 v3 H17 V5 h3 v16 h-5.5 v-4.5 a2.5 2.5 0 0 0 -5 0 V21 Z" />
-        </svg>
-      </div>
+      <img class="logo" src="/static/img/sac-district-seal.png" alt="USACE Sacramento District seal" />
       <span class="brand-title">Project SPK &mdash; USACE Policies and Publications AI Assistant</span>
       <span class="badge" id="versionBadge">BETA</span>
     </div>
@@ -67,11 +63,7 @@
         <div class="chat-scroll" id="chatScroll">
           <!-- Welcome screen (hidden once a conversation starts) -->
           <div id="welcome" class="welcome">
-            <div class="welcome-logo" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="34" height="34">
-                <path fill="#c8323b" d="M4 21 V5 h3 v3 h3.5 V5 h3 v3 H17 V5 h3 v16 h-5.5 v-4.5 a2.5 2.5 0 0 0 -5 0 V21 Z" />
-              </svg>
-            </div>
+            <img class="welcome-logo" src="/static/img/usace-sac-logo.png" alt="US Army Corps of Engineers, Sacramento District" />
             <h1 class="welcome-title">USACE Policies and Publications AI Agent</h1>
             <p class="welcome-desc">
               Ask me about any USACE policies and publications including all
@@ -181,6 +173,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.5.2"></script>
+  <script src="/static/app.js?v=0.5.3"></script>
 </body>
 </html>
