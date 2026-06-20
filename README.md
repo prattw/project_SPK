@@ -130,3 +130,11 @@ Retrieval pulls relevant chunks from all indexed files; GPT answers with citatio
 - S3 upload + async indexing for large drawing sets
 - Dedicated Revit/IFC pipeline (IfcOpenShell, Autodesk Design Automation)
 - Multi-project workspaces
+
+XXX
+Links to USACE Publicactions:
+https://www.usace.army.mil/Resources/Library/
+https://www.usace.army.mil/Resources/Library/Library-Program/
+https://www.publications.usace.army.mil/
+https://www.erdc.usace.army.mil/Library.aspx
+https://geospatial-usace.opendata.arcgis.com/

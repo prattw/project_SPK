@@ -108,6 +108,11 @@ def discover_documents(data_dir: Path | None = None) -> list[Path]:
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.name.startswith("."):
             continue
+        # Skip helper folders (e.g. "_originals" quarantine) so split-aside
+        # originals are not re-ingested whole.
+        rel_parts = path.relative_to(root).parts[:-1]
+        if any(part.startswith("_") for part in rel_parts):
+            continue
         if path.suffix.lower() not in INGESTABLE_EXTENSIONS:
             continue
         paths.append(path)

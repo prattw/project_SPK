@@ -36,13 +36,23 @@ class RAGService:
         return self._collection.count()
 
     def list_sources(self) -> list[str]:
-        if self.document_count == 0:
+        total = self.document_count
+        if total == 0:
             return []
-        result = self._collection.get(include=["metadatas"])
-        sources = sorted(
-            {(m or {}).get("source", "unknown") for m in (result.get("metadatas") or [])}
-        )
-        return sources
+        # Page through metadatas; pulling all rows at once overflows SQLite's
+        # variable limit on large indexes (hundreds of thousands of chunks).
+        sources: set[str] = set()
+        batch = 5_000
+        offset = 0
+        while offset < total:
+            result = self._collection.get(include=["metadatas"], limit=batch, offset=offset)
+            metadatas = result.get("metadatas") or []
+            if not metadatas:
+                break
+            for m in metadatas:
+                sources.add((m or {}).get("source", "unknown"))
+            offset += batch
+        return sorted(sources)
 
     @staticmethod
     def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:

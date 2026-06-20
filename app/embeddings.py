@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from openai import OpenAI
+import time
+
+from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
 
 from app.config import settings
+
+# Transient OpenAI errors worth retrying with backoff (rate limits, network blips).
+_RETRYABLE = (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
+_MAX_RETRIES = 6
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
@@ -46,11 +52,20 @@ def _embed_openai(texts: list[str]) -> list[list[float]]:
         raise ValueError("OPENAI_API_KEY is not configured (needed for OpenAI embeddings)")
 
     client = OpenAI(api_key=settings.openai_api_key)
-    response = client.embeddings.create(
-        model=settings.openai_embedding_model,
-        input=texts,
-    )
-    return [item.embedding for item in response.data]
+    delay = 2.0
+    for attempt in range(_MAX_RETRIES):
+        try:
+            response = client.embeddings.create(
+                model=settings.openai_embedding_model,
+                input=texts,
+            )
+            return [item.embedding for item in response.data]
+        except _RETRYABLE:
+            if attempt == _MAX_RETRIES - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 60.0)
+    raise RuntimeError("Unreachable: embedding retries exhausted")
 
 
 def embed_query(text: str) -> list[float]:
