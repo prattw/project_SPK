@@ -18,6 +18,7 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -33,6 +34,7 @@ from webauthn import (
 )
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.structs import (
+    AuthenticatorAttachment,
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
     ResidentKeyRequirement,
@@ -121,7 +123,36 @@ def _serializer(salt: str) -> URLSafeTimedSerializer:
 
 
 def _secure_cookies() -> bool:
-    return settings.webauthn_origin.lower().startswith("https://")
+    return any(o.lower().startswith("https://") for o in settings.webauthn_origins)
+
+
+def _origin_from_request(request: Request) -> str:
+    origin = (request.headers.get("origin") or "").strip()
+    if origin:
+        return origin
+    host = (request.headers.get("host") or "").strip()
+    if host:
+        return f"{request.url.scheme}://{host}"
+    return ""
+
+
+def _ceremony_context(request: Request) -> tuple[str, str]:
+    """Return (origin, rp_id) for this browser session.
+
+    localhost and 127.0.0.1 are different WebAuthn domains — rp_id must match
+    the hostname the user actually opened in the browser.
+    """
+    origin = _origin_from_request(request)
+    if not origin or origin not in settings.webauthn_origins:
+        allowed = ", ".join(settings.webauthn_origins)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Open the app at one of these URLs: {allowed}",
+        )
+    host = urlparse(origin).hostname or ""
+    if host in ("localhost", "127.0.0.1"):
+        return origin, host
+    return origin, settings.webauthn_rp_id
 
 
 def _set_cookie(resp: Response, name: str, value: str, max_age: int) -> None:
@@ -191,14 +222,16 @@ def register_begin(request: Request, body: RegisterBegin) -> Response:
 
     user_id = secrets.token_bytes(16)
     label = (body.label or "Security key").strip()[:80]
+    origin, rp_id = _ceremony_context(request)
 
     options = generate_registration_options(
-        rp_id=settings.webauthn_rp_id,
+        rp_id=rp_id,
         rp_name=settings.webauthn_rp_name,
         user_id=user_id,
         user_name=label,
         user_display_name=label,
         authenticator_selection=AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.CROSS_PLATFORM,
             resident_key=ResidentKeyRequirement.DISCOURAGED,
             user_verification=UserVerificationRequirement.PREFERRED,
         ),
@@ -209,7 +242,12 @@ def register_begin(request: Request, body: RegisterBegin) -> Response:
 
     resp = Response(content=options_to_json(options), media_type="application/json")
     payload = _serializer("register").dumps(
-        {"challenge": bytes_to_base64url(options.challenge), "label": label}
+        {
+            "challenge": bytes_to_base64url(options.challenge),
+            "label": label,
+            "rp_id": rp_id,
+            "origin": origin,
+        }
     )
     _set_cookie(resp, CHALLENGE_COOKIE, payload, CHALLENGE_MAX_AGE)
     return resp
@@ -231,8 +269,8 @@ async def register_complete(request: Request) -> Response:
         verification = verify_registration_response(
             credential=credential,
             expected_challenge=base64url_to_bytes(data["challenge"]),
-            expected_rp_id=settings.webauthn_rp_id,
-            expected_origin=settings.webauthn_origin,
+            expected_rp_id=data["rp_id"],
+            expected_origin=data["origin"],
             require_user_verification=False,
         )
     except Exception as exc:  # noqa: BLE001 - surface a clean error to the client
@@ -254,13 +292,21 @@ def login_begin(request: Request) -> Response:
     if not creds:
         raise HTTPException(status_code=403, detail="No security keys are enrolled yet.")
 
+    origin, rp_id = _ceremony_context(request)
+
     options = generate_authentication_options(
-        rp_id=settings.webauthn_rp_id,
+        rp_id=rp_id,
         allow_credentials=[PublicKeyCredentialDescriptor(id=cid) for cid in creds],
         user_verification=UserVerificationRequirement.PREFERRED,
     )
     resp = Response(content=options_to_json(options), media_type="application/json")
-    payload = _serializer("login").dumps({"challenge": bytes_to_base64url(options.challenge)})
+    payload = _serializer("login").dumps(
+        {
+            "challenge": bytes_to_base64url(options.challenge),
+            "rp_id": rp_id,
+            "origin": origin,
+        }
+    )
     _set_cookie(resp, CHALLENGE_COOKIE, payload, CHALLENGE_MAX_AGE)
     return resp
 
@@ -286,8 +332,8 @@ async def login_complete(request: Request) -> Response:
         verification = verify_authentication_response(
             credential=credential,
             expected_challenge=base64url_to_bytes(data["challenge"]),
-            expected_rp_id=settings.webauthn_rp_id,
-            expected_origin=settings.webauthn_origin,
+            expected_rp_id=data["rp_id"],
+            expected_origin=data["origin"],
             credential_public_key=record["public_key"],
             credential_current_sign_count=record["sign_count"],
             require_user_verification=False,

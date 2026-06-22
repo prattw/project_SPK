@@ -14,4 +14,5 @@ if [[ ! -f .env ]]; then
 fi
 
 echo "Starting server at http://127.0.0.1:8000"
+echo "Keep this Terminal window open while you use the app."
 exec .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000

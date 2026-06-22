@@ -18,6 +18,7 @@ const loginBtn = document.getElementById("loginBtn");
 const enrollBtn = document.getElementById("enrollBtn");
 const enrollLabel = document.getElementById("enrollLabel");
 const enrollCode = document.getElementById("enrollCode");
+const enrollCodeToggle = document.getElementById("enrollCodeToggle");
 const authError = document.getElementById("authError");
 const configStatus = document.getElementById("configStatus");
 const versionBadge = document.getElementById("versionBadge");
@@ -30,6 +31,8 @@ const sidebarShow = document.getElementById("sidebarShow");
 const promptGrid = document.getElementById("promptGrid");
 const aboutBtn = document.getElementById("aboutBtn");
 const helpBtn = document.getElementById("helpBtn");
+const viewChat = document.getElementById("view-chat");
+const dropOverlay = document.getElementById("dropOverlay");
 const aboutModal = document.getElementById("aboutModal");
 const helpModal = document.getElementById("helpModal");
 
@@ -94,7 +97,12 @@ async function webauthnLogin() {
       credentials: "same-origin",
     });
     if (!beginRes.ok) {
-      showAuthError((await beginRes.json()).detail || "Could not start sign-in.");
+      const detail = (await beginRes.json()).detail || "Could not start sign-in.";
+      if (beginRes.status === 403 && /no security keys/i.test(detail)) {
+        showAuthError("No key enrolled yet. Expand “First time? Enroll your key” below.");
+      } else {
+        showAuthError(detail);
+      }
       return;
     }
     const options = await beginRes.json();
@@ -128,7 +136,14 @@ async function webauthnLogin() {
     hideAuthGate();
     await initApp();
   } catch (err) {
-    showAuthError(err.name === "NotAllowedError" ? "Sign-in was cancelled or timed out." : err.message);
+    const msg = err.message || String(err);
+    if (msg === "Load failed" || msg === "Failed to fetch") {
+      showAuthError("Could not reach the server. Check that ./start.sh is still running, then try again.");
+    } else if (err.name === "NotAllowedError") {
+      showAuthError("Sign-in was cancelled or timed out. Tap your YubiKey when it blinks.");
+    } else {
+      showAuthError(msg);
+    }
   }
 }
 
@@ -182,7 +197,14 @@ async function webauthnEnroll() {
     hideAuthGate();
     await initApp();
   } catch (err) {
-    showAuthError(err.name === "NotAllowedError" ? "Enrollment was cancelled or timed out." : err.message);
+    const msg = err.message || String(err);
+    if (msg === "Load failed" || msg === "Failed to fetch") {
+      showAuthError("Could not reach the server. Check that ./start.sh is still running, then try again.");
+    } else if (err.name === "NotAllowedError") {
+      showAuthError("Enrollment was cancelled or timed out. Tap your YubiKey when it blinks.");
+    } else {
+      showAuthError(msg);
+    }
   }
 }
 
@@ -605,20 +627,80 @@ async function uploadFiles(files) {
   await refreshFiles();
 }
 
-async function handleFileInput(input) {
-  if (!input.files.length) return;
+async function handleFiles(files) {
+  if (!files || !files.length) return;
   showView("chat");
   setLoading(true);
   try {
-    await uploadFiles(input.files);
+    await uploadFiles(files);
   } finally {
-    input.value = "";
     setLoading(false);
   }
 }
 
+async function handleFileInput(input) {
+  if (!input.files.length) return;
+  await handleFiles(input.files);
+  input.value = "";
+}
+
 fileInput.addEventListener("change", () => handleFileInput(fileInput));
 fileInputDocs.addEventListener("change", () => handleFileInput(fileInputDocs));
+
+/* ---------- Drag and drop uploads ---------- */
+
+let dragDepth = 0;
+
+function hasFileDrag(dt) {
+  return dt && [...dt.types].includes("Files");
+}
+
+viewChat.addEventListener("dragenter", (e) => {
+  if (!hasFileDrag(e.dataTransfer)) return;
+  e.preventDefault();
+  dragDepth++;
+  viewChat.classList.add("drop-active");
+  dropOverlay.hidden = false;
+});
+
+viewChat.addEventListener("dragover", (e) => {
+  if (!hasFileDrag(e.dataTransfer)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+});
+
+viewChat.addEventListener("dragleave", (e) => {
+  if (!hasFileDrag(e.dataTransfer)) return;
+  e.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) {
+    viewChat.classList.remove("drop-active");
+    dropOverlay.hidden = true;
+  }
+});
+
+viewChat.addEventListener("drop", (e) => {
+  if (!hasFileDrag(e.dataTransfer)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  viewChat.classList.remove("drop-active");
+  dropOverlay.hidden = true;
+  handleFiles(e.dataTransfer.files);
+});
+
+// Stop Finder from pasting a file path into the question box when dropped on the textarea.
+questionEl.addEventListener("dragover", (e) => {
+  if (hasFileDrag(e.dataTransfer)) e.preventDefault();
+});
+questionEl.addEventListener("drop", (e) => {
+  if (!hasFileDrag(e.dataTransfer)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  dragDepth = 0;
+  viewChat.classList.remove("drop-active");
+  dropOverlay.hidden = true;
+  handleFiles(e.dataTransfer.files);
+});
 
 /* ---------- Chat ---------- */
 
@@ -719,6 +801,13 @@ document.addEventListener("keydown", (e) => {
 loginBtn.addEventListener("click", webauthnLogin);
 enrollBtn.addEventListener("click", webauthnEnroll);
 
+enrollCodeToggle.addEventListener("click", () => {
+  const show = enrollCode.type === "password";
+  enrollCode.type = show ? "text" : "password";
+  enrollCodeToggle.textContent = show ? "Hide" : "Show";
+  enrollCodeToggle.setAttribute("aria-label", show ? "Hide enrollment code" : "Show enrollment code");
+});
+
 /* ---------- Clear index ---------- */
 
 clearBtn.addEventListener("click", async () => {
@@ -748,6 +837,15 @@ async function bootstrap() {
     const status = await res.json();
     if (status.enabled && !status.authenticated) {
       showAuthGate();
+      const host = location.hostname;
+      if (host === "localhost" || host === "127.0.0.1") {
+        const hint = document.getElementById("enrollHint");
+        if (hint) {
+          hint.innerHTML =
+            'Local enrollment code: <code>spk-local-enroll</code>. ' +
+            'Insert your YubiKey before enrolling. If Mac offers Touch ID, choose <strong>More Options → Security Key</strong>.';
+        }
+      }
       // Still load public limits/version so the badge is populated.
       await loadLimits();
       return;

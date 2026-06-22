@@ -68,5 +68,12 @@ class Settings(BaseSettings):
     def webauthn_enabled(self) -> bool:
         return bool(self.webauthn_rp_id and self.webauthn_origin)
 
+    @property
+    def webauthn_origins(self) -> list[str]:
+        """Allowed origins for WebAuthn verification (comma-separated in env)."""
+        if not self.webauthn_origin:
+            return []
+        return [o.strip() for o in self.webauthn_origin.split(",") if o.strip()]
+
 
 settings = Settings()
