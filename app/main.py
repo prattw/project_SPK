@@ -218,7 +218,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> UploadR
             pages_total=page_count,
         )
 
-    result = ingest_path(path, original_name=path.name)
+    result = ingest_path(path, source_name=path.name)
 
     if not result.get("files_processed"):
         raise HTTPException(status_code=422, detail=str(result.get("message")))

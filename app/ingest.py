@@ -89,7 +89,7 @@ def ingest_path(
 
 
 def ingest_file(path: Path, original_name: str | None = None) -> dict[str, int | str | list[str]]:
-    return ingest_path(path, original_name)
+    return ingest_path(path, source_name=original_name)
 
 
 def pdf_needs_background(path: Path) -> tuple[bool, int]:

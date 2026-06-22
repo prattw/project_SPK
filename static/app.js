@@ -600,6 +600,21 @@ async function pollJob(jobId, filename, pagesTotal) {
   }
 }
 
+async function readJsonResponse(res) {
+  const text = await res.text();
+  if (!text) {
+    throw new Error(`Server returned an empty response (HTTP ${res.status}).`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      `Server returned an unexpected response (HTTP ${res.status}). ` +
+        "If you just uploaded a file, restart ./start.sh and try again."
+    );
+  }
+}
+
 async function uploadFiles(files) {
   for (const file of files) {
     addMessage("assistant", `Uploading ${file.name}…`);
@@ -607,7 +622,7 @@ async function uploadFiles(files) {
     form.append("file", file);
     try {
       const res = await apiFetch("/upload", { method: "POST", body: form });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) {
         addMessage("error", data.detail || "Upload failed");
         showNotice(data.detail || "Upload failed", "error");
