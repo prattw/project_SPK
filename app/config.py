@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     app_api_key: str = ""
     max_upload_mb: int = 300
 
+    # WebAuthn / YubiKey access control (enabled only when rp_id + origin are set,
+    # so local dev stays open and the hosted deployment is gated).
+    webauthn_rp_id: str = ""  # e.g. "projectspk-production.up.railway.app"
+    webauthn_rp_name: str = "Project SPK"
+    webauthn_origin: str = ""  # e.g. "https://projectspk-production.up.railway.app"
+    webauthn_enroll_code: str = ""  # admin shares with authorized users to enroll a key
+    session_secret: str = ""  # signs session/challenge cookies; set a long random value
+    session_max_age_hours: int = 12
+    auth_db_path: str = "./auth.db"
+
     chroma_persist_dir: str = "./chroma_db"
     data_dir: str = "./data"
 
@@ -53,6 +63,10 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def webauthn_enabled(self) -> bool:
+        return bool(self.webauthn_rp_id and self.webauthn_origin)
 
 
 settings = Settings()

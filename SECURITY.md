@@ -1,7 +1,46 @@
 # Securing Project SPK with CAC / YubiKey
 
-The app currently uses a shared `APP_API_KEY`. This document lays out the
-realistic paths to CAC (DoD Common Access Card) and YubiKey authentication.
+**WebAuthn / YubiKey access control is implemented** (see "Implemented" below).
+A shared `APP_API_KEY` also remains available as a simpler fallback. This
+document lays out the realistic paths to CAC (DoD Common Access Card) and
+YubiKey authentication.
+
+## Implemented: WebAuthn (YubiKey) with an admin allowlist
+
+The app gates access with a hardware security key when (and only when) the
+WebAuthn environment variables are set — so **local development stays open** and
+the **hosted deployment is protected**.
+
+How it works:
+- **Enrollment (admin allowlist):** You set a secret `WEBAUTHN_ENROLL_CODE` in
+  the hosting environment and share it only with authorized users. On the login
+  screen, a user opens "First time? Enroll your key," enters the code, names the
+  key, and taps their YubiKey. That key is added to the allowlist.
+- **Login:** Thereafter the user clicks "Sign in with security key" and taps the
+  key. A signed, http-only session cookie keeps them in for
+  `SESSION_MAX_AGE_HOURS` (default 12).
+- **Revoking access:** rotate `WEBAUTHN_ENROLL_CODE` to stop new enrollments;
+  delete a row from the `auth.db` credentials table (or reset the DB) to revoke
+  specific/all keys.
+
+Required environment variables (set these on Railway, leave blank locally):
+
+| Variable | Example | Purpose |
+|----------|---------|---------|
+| `WEBAUTHN_RP_ID` | `projectspk-production.up.railway.app` | Your domain, no scheme/port |
+| `WEBAUTHN_ORIGIN` | `https://projectspk-production.up.railway.app` | Full https origin |
+| `WEBAUTHN_ENROLL_CODE` | (a long secret) | Shared with authorized users to enroll |
+| `SESSION_SECRET` | (a long random string) | Signs session cookies; keep stable |
+| `SESSION_MAX_AGE_HOURS` | `12` | How long a login lasts |
+| `AUTH_DB_PATH` | `/data/auth.db` | Put on a **persistent volume** so keys survive deploys |
+
+Notes:
+- WebAuthn requires HTTPS — Railway provides this automatically. `RP_ID` must
+  match the exact host users visit (no `www.` mismatch).
+- If `AUTH_DB_PATH` is not on a persistent volume, enrolled keys are lost on
+  redeploy and users must re-enroll.
+- This proves possession of an *authorized* key (real access control), not just
+  "any YubiKey."
 
 ## The short version
 
@@ -14,11 +53,11 @@ realistic paths to CAC (DoD Common Access Card) and YubiKey authentication.
 
 ## Option details
 
-### 1. WebAuthn (YubiKey) — implementable now
-- Add FIDO2 registration/login endpoints (`py_webauthn` library), a small user
-  store, and session cookies.
-- Each authorized user registers their YubiKey once; afterwards login is
-  touch-the-key.
+### 1. WebAuthn (YubiKey) — DONE
+- FIDO2 registration/login endpoints (`py_webauthn`), a SQLite credential store,
+  and signed session cookies are implemented (`app/webauthn_auth.py`).
+- Each authorized user registers their YubiKey once (gated by the enrollment
+  code); afterwards login is touch-the-key.
 - **CAC cannot be used this way** — CACs are smartcards doing X.509/PIV, not FIDO2.
 
 ### 2. CAC via mutual TLS

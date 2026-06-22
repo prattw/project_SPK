@@ -1,4 +1,3 @@
-const API_KEY_STORAGE = "spk_api_key";
 const SESSIONS_STORAGE = "spk_sessions";
 
 const messagesEl = document.getElementById("messages");
@@ -15,8 +14,11 @@ const noticeBar = document.getElementById("noticeBar");
 const activeJobsEl = document.getElementById("activeJobs");
 const limitsListEl = document.getElementById("limitsList");
 const authGate = document.getElementById("authGate");
-const apiKeyInput = document.getElementById("apiKeyInput");
-const authSaveBtn = document.getElementById("authSaveBtn");
+const loginBtn = document.getElementById("loginBtn");
+const enrollBtn = document.getElementById("enrollBtn");
+const enrollLabel = document.getElementById("enrollLabel");
+const enrollCode = document.getElementById("enrollCode");
+const authError = document.getElementById("authError");
 const configStatus = document.getElementById("configStatus");
 const versionBadge = document.getElementById("versionBadge");
 const sessionListEl = document.getElementById("sessionList");
@@ -33,44 +35,155 @@ const helpModal = document.getElementById("helpModal");
 
 let authRequired = false;
 
-/* ---------- API key handling ---------- */
-
-function getApiKey() {
-  return sessionStorage.getItem(API_KEY_STORAGE) || "";
-}
-
-function setApiKey(key) {
-  if (key) sessionStorage.setItem(API_KEY_STORAGE, key);
-  else sessionStorage.removeItem(API_KEY_STORAGE);
-}
-
-function apiHeaders(extra = {}) {
-  const headers = { ...extra };
-  const key = getApiKey();
-  if (key) headers["X-API-Key"] = key;
-  return headers;
-}
+/* ---------- Authenticated fetch (cookie session) ---------- */
 
 async function apiFetch(url, options = {}) {
-  const res = await fetch(url, {
-    ...options,
-    headers: apiHeaders(options.headers || {}),
-  });
+  const res = await fetch(url, { credentials: "same-origin", ...options });
   if (res.status === 401) {
-    setApiKey("");
     showAuthGate();
-    throw new Error("Invalid or missing access key.");
+    throw new Error("Authentication required.");
   }
   return res;
 }
 
 function showAuthGate() {
   authGate.hidden = false;
-  apiKeyInput.focus();
 }
 
 function hideAuthGate() {
   authGate.hidden = true;
+}
+
+/* ---------- WebAuthn / YubiKey ---------- */
+
+function b64urlToBytes(value) {
+  const pad = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function bytesToB64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let str = "";
+  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function showAuthError(msg) {
+  authError.textContent = msg;
+  authError.hidden = false;
+}
+
+function clearAuthError() {
+  authError.hidden = true;
+  authError.textContent = "";
+}
+
+async function webauthnLogin() {
+  clearAuthError();
+  if (!window.PublicKeyCredential) {
+    showAuthError("This browser does not support security keys (WebAuthn).");
+    return;
+  }
+  try {
+    const beginRes = await fetch("/auth/login/begin", {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    if (!beginRes.ok) {
+      showAuthError((await beginRes.json()).detail || "Could not start sign-in.");
+      return;
+    }
+    const options = await beginRes.json();
+    options.challenge = b64urlToBytes(options.challenge);
+    (options.allowCredentials || []).forEach((c) => (c.id = b64urlToBytes(c.id)));
+
+    const assertion = await navigator.credentials.get({ publicKey: options });
+    const payload = {
+      id: assertion.id,
+      rawId: bytesToB64url(assertion.rawId),
+      type: assertion.type,
+      response: {
+        authenticatorData: bytesToB64url(assertion.response.authenticatorData),
+        clientDataJSON: bytesToB64url(assertion.response.clientDataJSON),
+        signature: bytesToB64url(assertion.response.signature),
+        userHandle: assertion.response.userHandle
+          ? bytesToB64url(assertion.response.userHandle)
+          : null,
+      },
+    };
+    const res = await fetch("/auth/login/complete", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      showAuthError((await res.json()).detail || "Sign-in failed.");
+      return;
+    }
+    hideAuthGate();
+    await initApp();
+  } catch (err) {
+    showAuthError(err.name === "NotAllowedError" ? "Sign-in was cancelled or timed out." : err.message);
+  }
+}
+
+async function webauthnEnroll() {
+  clearAuthError();
+  if (!window.PublicKeyCredential) {
+    showAuthError("This browser does not support security keys (WebAuthn).");
+    return;
+  }
+  const code = enrollCode.value.trim();
+  if (!code) {
+    showAuthError("Enter the enrollment code from your administrator.");
+    return;
+  }
+  try {
+    const beginRes = await fetch("/auth/register/begin", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: enrollLabel.value.trim(), enroll_code: code }),
+    });
+    if (!beginRes.ok) {
+      showAuthError((await beginRes.json()).detail || "Could not start enrollment.");
+      return;
+    }
+    const options = await beginRes.json();
+    options.challenge = b64urlToBytes(options.challenge);
+    options.user.id = b64urlToBytes(options.user.id);
+    (options.excludeCredentials || []).forEach((c) => (c.id = b64urlToBytes(c.id)));
+
+    const cred = await navigator.credentials.create({ publicKey: options });
+    const payload = {
+      id: cred.id,
+      rawId: bytesToB64url(cred.rawId),
+      type: cred.type,
+      response: {
+        attestationObject: bytesToB64url(cred.response.attestationObject),
+        clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+      },
+    };
+    const res = await fetch("/auth/register/complete", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      showAuthError((await res.json()).detail || "Enrollment failed.");
+      return;
+    }
+    hideAuthGate();
+    await initApp();
+  } catch (err) {
+    showAuthError(err.name === "NotAllowedError" ? "Enrollment was cancelled or timed out." : err.message);
+  }
 }
 
 /* ---------- Session history (stored in this browser) ---------- */
@@ -138,6 +251,19 @@ function openSession(id) {
   chatScroll.scrollTop = chatScroll.scrollHeight;
 }
 
+function deleteSession(id) {
+  const s = sessions.find((x) => x.id === id);
+  if (!s) return;
+  if (!confirm(`Delete "${s.title}"? This cannot be undone.`)) return;
+  sessions = sessions.filter((x) => x.id !== id);
+  saveSessions();
+  if (currentSessionId === id) {
+    newConversation();
+  } else {
+    renderSessionList();
+  }
+}
+
 function sessionGroupLabel(updated) {
   const days = (Date.now() - updated) / 86400000;
   if (days <= 7) return "Recent";
@@ -171,14 +297,31 @@ function renderSessionList() {
       sessionListEl.appendChild(g);
       lastGroup = group;
     }
+    const row = document.createElement("div");
+    row.className = "session-row" + (s.id === currentSessionId ? " active" : "");
+
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "session-item" + (s.id === currentSessionId ? " active" : "");
+    btn.className = "session-item";
     btn.innerHTML = `<span class="dot"></span><span class="label"></span>`;
     btn.querySelector(".label").textContent = s.title;
     btn.title = `${s.title}\n${formatSessionTime(s.updated)}`;
     btn.addEventListener("click", () => openSession(s.id));
-    sessionListEl.appendChild(btn);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "session-delete";
+    del.title = "Delete conversation";
+    del.setAttribute("aria-label", `Delete ${s.title}`);
+    del.innerHTML = "&times;";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteSession(s.id);
+    });
+
+    row.appendChild(btn);
+    row.appendChild(del);
+    sessionListEl.appendChild(row);
   });
 
   if (!sessionListEl.children.length) {
@@ -345,9 +488,6 @@ async function loadLimits() {
     updateConfigStatus(data);
     if (data.version) versionBadge.textContent = `BETA v${data.version}`;
 
-    if (authRequired && !getApiKey()) showAuthGate();
-    else hideAuthGate();
-
     const L = data.context_limits;
     const ctxK = Math.round(L.max_context_chars / 1000);
     limitsListEl.innerHTML = `
@@ -366,7 +506,6 @@ async function loadLimits() {
 /* ---------- Files / indexing ---------- */
 
 async function refreshFiles() {
-  if (authRequired && !getApiKey()) return;
   try {
     const res = await apiFetch("/files");
     const data = await res.json();
@@ -468,10 +607,6 @@ async function uploadFiles(files) {
 
 async function handleFileInput(input) {
   if (!input.files.length) return;
-  if (authRequired && !getApiKey()) {
-    showAuthGate();
-    return;
-  }
   showView("chat");
   setLoading(true);
   try {
@@ -488,11 +623,6 @@ fileInputDocs.addEventListener("change", () => handleFileInput(fileInputDocs));
 /* ---------- Chat ---------- */
 
 async function askQuestion(question) {
-  if (authRequired && !getApiKey()) {
-    showAuthGate();
-    return;
-  }
-
   addMessage("user", question);
   setLoading(true);
   hideNotice();
@@ -586,19 +716,8 @@ document.addEventListener("keydown", (e) => {
 
 /* ---------- Auth gate ---------- */
 
-authSaveBtn.addEventListener("click", async () => {
-  const key = apiKeyInput.value.trim();
-  if (!key) return;
-  setApiKey(key);
-  apiKeyInput.value = "";
-  hideAuthGate();
-  await loadLimits();
-  await refreshFiles();
-});
-
-apiKeyInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") authSaveBtn.click();
-});
+loginBtn.addEventListener("click", webauthnLogin);
+enrollBtn.addEventListener("click", webauthnEnroll);
 
 /* ---------- Clear index ---------- */
 
@@ -617,5 +736,26 @@ clearBtn.addEventListener("click", async () => {
 
 /* ---------- Init ---------- */
 
-renderSessionList();
-loadLimits().then(() => refreshFiles());
+async function initApp() {
+  await loadLimits();
+  await refreshFiles();
+}
+
+async function bootstrap() {
+  renderSessionList();
+  try {
+    const res = await fetch("/auth/status", { credentials: "same-origin" });
+    const status = await res.json();
+    if (status.enabled && !status.authenticated) {
+      showAuthGate();
+      // Still load public limits/version so the badge is populated.
+      await loadLimits();
+      return;
+    }
+  } catch {
+    /* if status check fails, fall through and try to load the app */
+  }
+  await initApp();
+}
+
+bootstrap();

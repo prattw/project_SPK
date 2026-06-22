@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.5.3" />
+  <link rel="stylesheet" href="/static/style.css?v=0.6.0" />
 </head>
 <body>
   <!-- Top header bar -->
@@ -119,13 +119,23 @@
     </main>
   </div>
 
-  <!-- Access key overlay -->
+  <!-- Security key (YubiKey) gate -->
   <div id="authGate" class="overlay" hidden>
     <div class="modal auth-modal">
-      <h2>Access key required</h2>
-      <p>This deployment is protected. Enter your team access key to continue. It is stored for this browser session only.</p>
-      <input type="password" id="apiKeyInput" placeholder="Enter team API key" autocomplete="off" />
-      <button type="button" id="authSaveBtn" class="primary">Continue</button>
+      <img class="auth-logo" src="/static/img/sac-district-seal.png" alt="USACE Sacramento District seal" />
+      <h2>Security key required</h2>
+      <p>This application is restricted to authorized users. Insert your security key (YubiKey) and tap it to sign in.</p>
+
+      <button type="button" id="loginBtn" class="primary auth-primary">Sign in with security key</button>
+      <p id="authError" class="auth-error" hidden></p>
+
+      <details class="auth-enroll">
+        <summary>First time? Enroll your key</summary>
+        <p class="hint">Enter the enrollment code provided by your administrator, then tap your key to register it.</p>
+        <input type="text" id="enrollLabel" placeholder="Key name (e.g. Will's YubiKey)" autocomplete="off" />
+        <input type="password" id="enrollCode" placeholder="Enrollment code" autocomplete="off" />
+        <button type="button" id="enrollBtn" class="primary">Enroll this key</button>
+      </details>
     </div>
   </div>
 
@@ -173,6 +183,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.5.3"></script>
+  <script src="/static/app.js?v=0.6.0"></script>
 </body>
 </html>

@@ -12,6 +12,7 @@ from app.config import settings
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
 from app.jobs import get_job, start_background_ingest
 from app.rag import get_rag
+from app.webauthn_auth import WebAuthnMiddleware, router as auth_router
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -110,7 +111,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.5.3",
+    version="0.6.0",
     lifespan=lifespan,
 )
 
@@ -122,6 +123,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(ApiKeyMiddleware)
+app.add_middleware(WebAuthnMiddleware)
+
+app.include_router(auth_router)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -151,7 +155,7 @@ def health() -> HealthResponse:
         data_dir=str(settings.data_path),
         llm=settings.openai_model,
         embeddings=f"{settings.embedding_provider}:{settings.openai_embedding_model if settings.embedding_provider == 'openai' else settings.voyage_embedding_model}",
-        auth_required=bool(settings.app_api_key),
+        auth_required=bool(settings.app_api_key) or settings.webauthn_enabled,
         llm_configured=bool(settings.openai_api_key),
         embeddings_configured=_embeddings_configured(),
         context_limits=ContextLimits(

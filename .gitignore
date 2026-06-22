@@ -11,6 +11,10 @@ data/*
 !data/.gitkeep
 chroma_db/
 
+# Auth / WebAuthn credential store — never commit
+auth.db
+*.db
+
 # Source documents and generated catalogs — never commit to the public repo
 DOCUMENTS for RAG/
 catalog/

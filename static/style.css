@@ -232,11 +232,22 @@ body {
   text-transform: none;
 }
 
+.session-row {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.session-row:hover { background: #f0f1f4; }
+.session-row.active { background: #e8eaef; }
+.session-row.active .session-item { font-weight: 600; }
+
 .session-item {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
   background: none;
   border: none;
@@ -247,6 +258,25 @@ body {
   cursor: pointer;
   overflow: hidden;
 }
+
+.session-delete {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  margin-right: 0.15rem;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.session-row:hover .session-delete { opacity: 1; }
+.session-delete:hover { background: #e0d3d4; color: var(--usace-red); }
 
 .session-item .dot {
   width: 7px;
@@ -262,8 +292,6 @@ body {
   text-overflow: ellipsis;
 }
 
-.session-item:hover { background: #f0f1f4; }
-.session-item.active { background: #e8eaef; font-weight: 600; }
 
 .sidebar-show {
   position: absolute;
@@ -632,13 +660,60 @@ body {
   cursor: pointer;
 }
 
+.auth-modal {
+  max-width: 440px;
+  text-align: center;
+}
+
 .auth-modal input {
   width: 100%;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 0.9rem;
-  margin: 0.75rem 0;
+  margin: 0.5rem 0;
+}
+
+.auth-logo {
+  height: 64px;
+  width: auto;
+  margin: 0 auto 0.5rem;
+  display: block;
+}
+
+.auth-primary {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.7rem 1rem;
+  font-size: 0.95rem;
+}
+
+.auth-error {
+  color: var(--usace-red);
+  font-size: 0.85rem;
+  margin: 0.75rem 0 0;
+}
+
+.auth-error[hidden] { display: none; }
+
+.auth-enroll {
+  margin-top: 1.25rem;
+  text-align: left;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.auth-enroll summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--usace-red);
+  font-weight: 600;
+}
+
+.auth-enroll .hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0.5rem 0;
 }
 
 .primary {
