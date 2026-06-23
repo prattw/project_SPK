@@ -8,7 +8,9 @@ RESPONSE_FORMAT = """Format every answer like a USACE technical review:
 
 - Organize with clear markdown headings and numbered items (e.g., "COMPLIANT ITEMS:", "NON-COMPLIANT OR MISSING ITEMS:", "Legal Requirements:", "Recommended Approach:" — choose headings that fit the question).
 - For compliance or comparison questions, label each item in bold with a status: **COMPLIANT**, **NON-COMPLIANT**, **PARTIALLY COMPLIANT**, or **NOT VERIFIED**, followed by the evidence.
-- Quote the source documents directly when the wording matters, and cite each fact inline as: *filename, Page N* (use the document number too when known, e.g., "ER 415-1-10").
+- Quote the source documents directly when the wording matters, and cite each fact inline using markdown links:
+  `[Document Number, Page N](url)` — e.g. `[ER 415-1-10, Page 42](https://www.publications.usace.army.mil/...)`.
+  Use the exact URL provided in the Available citations list when present.
 - End with a "SUMMARY:" or "Recommended Approach:" section when the answer supports a decision.
 - Then add a "Confidence Assessment:" — a level (High/Medium/Low) with a percentage and 1-3 sentences explaining what would raise or lower it (missing documents, possible newer revisions, items likely addressed elsewhere).
 - Close with this disclaimer:
@@ -87,22 +89,55 @@ def _chat(messages: list[dict[str, str]]) -> str:
     raise RuntimeError("Could not find compatible parameters for the configured model")
 
 
-def generate_general_answer(question: str) -> str:
-    return _chat(
-        [
-            {"role": "system", "content": GENERAL_SYSTEM_PROMPT},
-            {"role": "user", "content": question},
-        ]
-    )
+def _format_citation_block(citations: list[dict] | None) -> str:
+    if not citations:
+        return ""
+    lines = ["Available citations (use these exact URLs in markdown links):"]
+    for c in citations[:24]:
+        label = c.get("label") or c.get("source") or "Source"
+        url = c.get("url") or ""
+        lines.append(f"- [{label}]({url})")
+    return "\n".join(lines) + "\n\n"
 
 
-def generate_answer(question: str, context: str) -> str:
-    return _chat(
-        [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"Context from uploaded project files:\n\n{context}\n\n---\n\nQuestion: {question}",
-            },
-        ]
+def _history_messages(history: list[dict[str, str]] | None, limit: int = 8) -> list[dict[str, str]]:
+    if not history:
+        return []
+    out: list[dict[str, str]] = []
+    for item in history[-limit:]:
+        role = item.get("role")
+        content = (item.get("content") or item.get("text") or "").strip()
+        if role in ("user", "assistant") and content:
+            out.append({"role": role, "content": content})
+    return out
+
+
+def generate_general_answer(
+    question: str,
+    history: list[dict[str, str]] | None = None,
+) -> str:
+    messages = [{"role": "system", "content": GENERAL_SYSTEM_PROMPT}]
+    messages.extend(_history_messages(history))
+    messages.append({"role": "user", "content": question})
+    return _chat(messages)
+
+
+def generate_answer(
+    question: str,
+    context: str,
+    history: list[dict[str, str]] | None = None,
+    citations: list[dict] | None = None,
+) -> str:
+    citation_block = _format_citation_block(citations)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(_history_messages(history))
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"{citation_block}"
+                f"Context from uploaded project files:\n\n{context}\n\n---\n\nQuestion: {question}"
+            ),
+        }
     )
+    return _chat(messages)

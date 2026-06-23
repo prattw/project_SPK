@@ -3,13 +3,13 @@ const SESSIONS_STORAGE = "spk_sessions";
 const messagesEl = document.getElementById("messages");
 const chatScroll = document.getElementById("chatScroll");
 const welcomeEl = document.getElementById("welcome");
-const fileListEl = document.getElementById("fileList");
+const libraryListEl = document.getElementById("libraryList");
+const uploadListEl = document.getElementById("uploadList");
 const fileInput = document.getElementById("fileInput");
 const fileInputDocs = document.getElementById("fileInputDocs");
 const chatForm = document.getElementById("chatForm");
 const questionEl = document.getElementById("question");
 const sendBtn = document.getElementById("sendBtn");
-const clearBtn = document.getElementById("clearBtn");
 const noticeBar = document.getElementById("noticeBar");
 const activeJobsEl = document.getElementById("activeJobs");
 const limitsListEl = document.getElementById("limitsList");
@@ -247,10 +247,37 @@ function ensureSession() {
     created: Date.now(),
     updated: Date.now(),
     messages: [],
+    documents: [],
   };
   sessions.unshift(s);
   currentSessionId = s.id;
+  syncPublications();
   return s;
+}
+
+function trackSessionDocument(filename) {
+  const s = ensureSession();
+  if (!s.documents) s.documents = [];
+  if (!s.documents.includes(filename)) {
+    s.documents.push(filename);
+    s.updated = Date.now();
+    saveSessions();
+    renderSessionList();
+  }
+}
+
+function sessionFocusSources() {
+  const s = currentSession();
+  return s?.documents?.length ? [...s.documents] : null;
+}
+
+function sessionHistory() {
+  const s = currentSession();
+  if (!s?.messages?.length) return null;
+  return s.messages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .slice(-8)
+    .map((m) => ({ role: m.role, content: m.text }));
 }
 
 function newConversation() {
@@ -259,6 +286,7 @@ function newConversation() {
   welcomeEl.hidden = false;
   hideNotice();
   renderSessionList();
+  syncPublications();
 }
 
 function openSession(id) {
@@ -267,7 +295,7 @@ function openSession(id) {
   currentSessionId = id;
   messagesEl.innerHTML = "";
   welcomeEl.hidden = s.messages.length > 0;
-  s.messages.forEach((m) => renderMessage(m.role, m.text, m.sources || []));
+  s.messages.forEach((m) => renderMessage(m.role, m.text, m.sources || [], m.citations || []));
   showView("chat");
   renderSessionList();
   chatScroll.scrollTop = chatScroll.scrollHeight;
@@ -330,6 +358,14 @@ function renderSessionList() {
     btn.title = `${s.title}\n${formatSessionTime(s.updated)}`;
     btn.addEventListener("click", () => openSession(s.id));
 
+    row.appendChild(btn);
+    if (s.documents?.length) {
+      const docs = document.createElement("div");
+      docs.className = "session-docs";
+      docs.textContent = `${s.documents.length} file(s): ${s.documents.slice(0, 2).join(", ")}${s.documents.length > 2 ? "…" : ""}`;
+      row.appendChild(docs);
+    }
+
     const del = document.createElement("button");
     del.type = "button";
     del.className = "session-delete";
@@ -341,7 +377,6 @@ function renderSessionList() {
       deleteSession(s.id);
     });
 
-    row.appendChild(btn);
     row.appendChild(del);
     sessionListEl.appendChild(row);
   });
@@ -361,8 +396,9 @@ function showView(name) {
     t.classList.toggle("active", t.dataset.view === name);
   });
   document.getElementById("view-chat").hidden = name !== "chat";
-  document.getElementById("view-documents").hidden = name !== "documents";
-  if (name === "documents") refreshFiles();
+  document.getElementById("view-library").hidden = name !== "library";
+  document.getElementById("view-uploads").hidden = name !== "uploads";
+  if (name === "library" || name === "uploads") refreshFiles();
 }
 
 document.querySelectorAll(".tab[data-view]").forEach((t) => {
@@ -379,7 +415,8 @@ function inlineMd(s) {
   return s
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|\s)\*([^*\n]+)\*(?=\s|[.,;:!?)]|$)/g, "$1<em>$2</em>")
-    .replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
 function renderMarkdown(text) {
@@ -422,7 +459,7 @@ function renderMarkdown(text) {
   return out.join("");
 }
 
-function renderMessage(role, text, sources = []) {
+function renderMessage(role, text, sources = [], citations = []) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   if (role === "assistant") {
@@ -435,7 +472,17 @@ function renderMessage(role, text, sources = []) {
     p.textContent = text;
     div.appendChild(p);
   }
-  if (sources.length) {
+  if (citations?.length) {
+    const c = document.createElement("div");
+    c.className = "citation-list";
+    c.innerHTML =
+      "Citations: " +
+      citations
+        .slice(0, 12)
+        .map((item) => `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.label)}</a>`)
+        .join(" · ");
+    div.appendChild(c);
+  } else if (sources.length) {
     const s = document.createElement("div");
     s.className = "sources";
     s.textContent = "Sources: " + sources.join(", ");
@@ -445,12 +492,12 @@ function renderMessage(role, text, sources = []) {
   chatScroll.scrollTop = chatScroll.scrollHeight;
 }
 
-function addMessage(role, text, sources = []) {
+function addMessage(role, text, sources = [], citations = []) {
   welcomeEl.hidden = true;
-  renderMessage(role, text, sources);
+  renderMessage(role, text, sources, citations);
 
   const s = ensureSession();
-  s.messages.push({ role, text, sources });
+  s.messages.push({ role, text, sources, citations });
   if (role === "user" && s.title === "New conversation") {
     s.title = text.length > 60 ? text.slice(0, 57) + "..." : text;
   }
@@ -527,22 +574,124 @@ async function loadLimits() {
 
 /* ---------- Files / indexing ---------- */
 
+function formatDocDate(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+  } catch {
+    return "—";
+  }
+}
+
+function renderLibraryList(container, docs, emptyMessage) {
+  container.innerHTML = "";
+  if (!docs.length) {
+    container.innerHTML = `<div class="library-list-empty">${emptyMessage || "No library documents indexed yet."}</div>`;
+    return;
+  }
+
+  const sorted = [...docs].sort((a, b) => {
+    const an = (a.doc_number || a.source || "").toUpperCase();
+    const bn = (b.doc_number || b.source || "").toUpperCase();
+    return an.localeCompare(bn, undefined, { numeric: true, sensitivity: "base" });
+  });
+
+  sorted.forEach((doc) => {
+    const item = document.createElement("div");
+    item.className = "library-item";
+
+    const num = doc.doc_number || doc.source;
+    const href = doc.url || "#";
+    const title = doc.display_title || doc.title || doc.source;
+    const part = doc.part ? `<span class="lib-part">, ${escapeHtml(doc.part)}</span>` : "";
+    const dateLabel = doc.date_label === "updated" ? "updated" : "published";
+    const dateYear = doc.date_year || doc.year_published || doc.year_updated || "—";
+
+    item.innerHTML =
+      `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(num)}</a>` +
+      `, ${escapeHtml(title)}` +
+      part +
+      `<span class="lib-updated">, ${dateLabel}: ${escapeHtml(String(dateYear))}</span>`;
+
+    container.appendChild(item);
+  });
+}
+
+function renderDocGrid(container, docs, emptyMessage) {
+  container.innerHTML = "";
+  if (!docs.length) {
+    container.innerHTML = `<div class="file-grid-empty">${emptyMessage}</div>`;
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "file-grid-header";
+  header.innerHTML = "<span>Document</span><span>Type / Number</span><span>Updated</span>";
+  container.appendChild(header);
+
+  docs.forEach((doc) => {
+    const row = document.createElement("div");
+    row.className = "doc-card";
+    const label = doc.doc_number || doc.source;
+    const href = doc.url || "#";
+    const typeLine = [doc.doc_type, doc.doc_number].filter(Boolean).join(" · ") || "Uploaded file";
+    row.innerHTML = `
+      <a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>
+      <span class="doc-type">${escapeHtml(typeLine)}</span>
+      <span class="doc-date">${escapeHtml(formatDocDate(doc.updated_at || doc.indexed_at))}</span>
+    `;
+    container.appendChild(row);
+  });
+}
+
 async function refreshFiles() {
   try {
     const res = await apiFetch("/files");
-    const data = await res.json();
-    fileListEl.innerHTML = "";
-    if (!data.files.length) {
-      fileListEl.innerHTML = "<li>No files indexed yet — upload documents to get started.</li>";
-      return;
+    const data = await readJsonResponse(res);
+    if (!res.ok) {
+      throw new Error(data.detail || "Could not load document list.");
     }
-    data.files.forEach((name) => {
-      const li = document.createElement("li");
-      li.textContent = name;
-      fileListEl.appendChild(li);
-    });
+    const docs = data.documents?.length
+      ? data.documents
+      : (data.files || []).map((name) => ({ source: name, upload_origin: "library" }));
+
+    const library = docs.filter((d) => d.upload_origin !== "user");
+    const uploads = docs.filter((d) => d.upload_origin === "user");
+
+    renderLibraryList(
+      libraryListEl,
+      library,
+      `No library documents indexed yet (${(data.chunks_indexed || 0).toLocaleString()} chunks in index — run bulk ingest to load the USACE corpus).`
+    );
+    renderDocGrid(
+      uploadListEl,
+      uploads,
+      "No user uploads yet — upload specs, submittals, or project files to get started."
+    );
+  } catch (err) {
+    const msg = escapeHtml(err.message || "Could not load documents.");
+    libraryListEl.innerHTML = `<div class="library-list-empty">${msg}</div>`;
+    uploadListEl.innerHTML = `<div class="file-grid-empty">${msg}</div>`;
+  }
+}
+
+async function syncPublications() {
+  try {
+    const res = await apiFetch("/sync/publications", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) return;
+    if (data.new_publications?.length) {
+      const names = data.new_publications
+        .slice(0, 3)
+        .map((p) => p.doc_number || p.title)
+        .join(", ");
+      showNotice(
+        `USACE publication check: ${data.new_publications.length} newly listed item(s) found (${names}${data.new_publications.length > 3 ? "…" : ""}).`,
+        "info"
+      );
+    }
   } catch {
-    /* auth gate already shown by apiFetch */
+    /* non-blocking background sync */
   }
 }
 
@@ -616,10 +765,12 @@ async function readJsonResponse(res) {
 }
 
 async function uploadFiles(files) {
+  const session = ensureSession();
   for (const file of files) {
     addMessage("assistant", `Uploading ${file.name}…`);
     const form = new FormData();
     form.append("file", file);
+    form.append("session_id", session.id);
     try {
       const res = await apiFetch("/upload", { method: "POST", body: form });
       const data = await readJsonResponse(res);
@@ -631,8 +782,10 @@ async function uploadFiles(files) {
       if (data.status === "processing" && data.job_id) {
         addMessage("assistant", data.message);
         await pollJob(data.job_id, data.filename, data.pages_total || 0);
+        trackSessionDocument(data.filename);
         continue;
       }
+      trackSessionDocument(data.filename);
       addMessage("assistant", `${data.filename} indexed (${data.chunks_indexed} chunks).`);
       showWarnings(data.warnings, "Indexing");
     } catch (err) {
@@ -720,22 +873,29 @@ questionEl.addEventListener("drop", (e) => {
 /* ---------- Chat ---------- */
 
 async function askQuestion(question) {
+  ensureSession();
   addMessage("user", question);
   setLoading(true);
   hideNotice();
+
+  const payload = { question };
+  const focus = sessionFocusSources();
+  if (focus?.length) payload.focus_sources = focus;
+  const history = sessionHistory();
+  if (history?.length) payload.history = history.slice(0, -1);
 
   try {
     const res = await apiFetch("/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (!res.ok) {
       addMessage("error", data.detail || "Query failed");
       return;
     }
-    addMessage("assistant", data.answer, data.sources || []);
+    addMessage("assistant", data.answer, data.sources || [], data.citations || []);
     showWarnings(data.context_warnings, "This answer");
   } catch (err) {
     addMessage("error", err.message || "Network error — is the server running?");
@@ -821,21 +981,6 @@ enrollCodeToggle.addEventListener("click", () => {
   enrollCode.type = show ? "text" : "password";
   enrollCodeToggle.textContent = show ? "Hide" : "Show";
   enrollCodeToggle.setAttribute("aria-label", show ? "Hide enrollment code" : "Show enrollment code");
-});
-
-/* ---------- Clear index ---------- */
-
-clearBtn.addEventListener("click", async () => {
-  if (!confirm("Clear all indexed documents?")) return;
-  try {
-    await apiFetch("/reset", { method: "POST" });
-    hideNotice();
-    hideActiveJob();
-    addMessage("assistant", "Index cleared. Upload files to start again.");
-    await refreshFiles();
-  } catch (err) {
-    addMessage("error", err.message);
-  }
 });
 
 /* ---------- Init ---------- */

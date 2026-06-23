@@ -26,13 +26,15 @@
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 3C6.5 3 2 6.6 2 11c0 2.2 1.1 4.2 3 5.6V21l3.6-2c1.1.3 2.2.4 3.4.4 5.5 0 10-3.6 10-8S17.5 3 12 3z"/></svg>
       AI Assistant
     </button>
-    <button type="button" class="tab" data-view="documents">
+    <button type="button" class="tab" data-view="library">
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zm-1 7V3.5L18.5 9z"/></svg>
-      Document List
+      Document Library
     </button>
-    <div class="tabbar-right">
-      <button type="button" id="clearBtn" class="tab-action">Clear Index</button>
-    </div>
+    <button type="button" class="tab" data-view="uploads">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+      User Uploaded Documents
+    </button>
+    <div class="tabbar-right"></div>
   </nav>
 
   <div class="layout">
@@ -103,18 +105,30 @@
         </form>
       </section>
 
-      <!-- Documents view -->
-      <section id="view-documents" class="view" hidden>
-        <div class="docs-panel">
+      <!-- Document Library (USACE / indexed corpus) -->
+      <section id="view-library" class="view" hidden>
+        <div class="docs-panel docs-panel-library">
           <div class="docs-head">
-            <h2>Indexed documents</h2>
+            <h2>Document Library</h2>
+          </div>
+          <p class="docs-desc">USACE policies, regulations, and publications indexed for retrieval.</p>
+          <div id="libraryList" class="library-list"></div>
+        </div>
+      </section>
+
+      <!-- User uploaded project documents -->
+      <section id="view-uploads" class="view" hidden>
+        <div class="docs-panel docs-panel-uploads">
+          <div class="docs-head">
+            <h2>User Uploaded Documents</h2>
             <label class="upload-btn">
               <input type="file" id="fileInputDocs" multiple accept=".pdf,.docx,.xlsx,.xer,.xml,.ifc,.gltf,.glb,.txt,.md,.rvt,.dwg,.dxf,.nwd,.msg" hidden />
               Upload files
             </label>
           </div>
+          <p class="docs-desc">Specs, submittals, schedules, and other project files uploaded in this browser.</p>
           <div id="activeJobs" class="active-jobs" hidden></div>
-          <ul id="fileList" class="file-list"></ul>
+          <div id="uploadList" class="file-grid"></div>
         </div>
       </section>
     </main>
@@ -187,6 +201,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.6.1"></script>
+  <script src="/static/app.js?v=0.7.5"></script>
 </body>
 </html>

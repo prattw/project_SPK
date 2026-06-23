@@ -8,8 +8,12 @@ from typing import Any
 import chromadb
 from chromadb.api.models.Collection import Collection
 
+from datetime import datetime, timezone
+
+from app.citations import citations_from_chunks
 from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
+from app.doc_metadata import classify_upload_origin, enrich_library_fields
 from app.embeddings import embed_query, embed_texts
 from app.llm import generate_answer, generate_general_answer
 
@@ -53,6 +57,75 @@ class RAGService:
                 sources.add((m or {}).get("source", "unknown"))
             offset += batch
         return sorted(sources)
+
+    def list_documents(self) -> list[dict[str, Any]]:
+        """Aggregate per-source metadata for the Documents tab."""
+        total = self.document_count
+        if total == 0:
+            return []
+
+        by_source: dict[str, dict[str, Any]] = {}
+        batch = 5_000
+        offset = 0
+        while offset < total:
+            result = self._collection.get(include=["metadatas"], limit=batch, offset=offset)
+            metadatas = result.get("metadatas") or []
+            if not metadatas:
+                break
+            for m in metadatas:
+                meta = m or {}
+                source = meta.get("source", "unknown")
+                if source not in by_source:
+                    by_source[source] = {
+                        "source": source,
+                        "doc_number": meta.get("doc_number"),
+                        "doc_type": meta.get("doc_type"),
+                        "title": meta.get("title"),
+                        "category": meta.get("category"),
+                        "chunks": 0,
+                        "indexed_at": meta.get("indexed_at"),
+                        "session_id": meta.get("session_id"),
+                        "upload_origin": meta.get("upload_origin"),
+                        "part": meta.get("part"),
+                        "display_title": meta.get("display_title"),
+                        "year_published": meta.get("year_published"),
+                        "year_updated": meta.get("year_updated"),
+                    }
+                entry = by_source[source]
+                entry["chunks"] += 1
+                for key in (
+                    "doc_number",
+                    "doc_type",
+                    "title",
+                    "category",
+                    "session_id",
+                    "upload_origin",
+                    "part",
+                    "display_title",
+                    "year_published",
+                    "year_updated",
+                ):
+                    if not entry.get(key) and meta.get(key):
+                        entry[key] = meta[key]
+                indexed_at = meta.get("indexed_at")
+                if indexed_at and (
+                    not entry.get("indexed_at") or indexed_at > entry["indexed_at"]
+                ):
+                    entry["indexed_at"] = indexed_at
+            offset += batch
+
+        docs: list[dict[str, Any]] = []
+        for source, entry in by_source.items():
+            entry["updated_at"] = entry.get("indexed_at")
+            entry["upload_origin"] = classify_upload_origin(source, entry)
+            entry.update(enrich_library_fields(source, entry))
+            entry["url"] = None  # filled by API layer via citations helper
+            docs.append(entry)
+
+        def _sort_key(doc: dict[str, Any]) -> tuple[str, str]:
+            return (doc.get("doc_number") or doc.get("source") or "", doc.get("part") or "")
+
+        return sorted(docs, key=_sort_key)
 
     @staticmethod
     def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -124,6 +197,12 @@ class RAGService:
         records, warnings = cap_chunk_records(records, source)
         return self._upsert_batch(source, records), warnings
 
+    @staticmethod
+    def _stamp_meta(extra_meta: dict[str, str] | None) -> dict[str, str]:
+        meta = dict(extra_meta or {})
+        meta.setdefault("indexed_at", datetime.now(tz=timezone.utc).isoformat())
+        return meta
+
     def ingest_documents(
         self,
         documents: list[dict[str, Any]],
@@ -131,6 +210,7 @@ class RAGService:
     ) -> tuple[int, list[str]]:
         warnings: list[str] = []
         total = 0
+        base_meta = self._stamp_meta(extra_meta)
 
         for doc in documents:
             source = doc["source"]
@@ -145,7 +225,6 @@ class RAGService:
             capped, chunk_warnings = cap_chunks(raw_chunks, source)
             warnings.extend(chunk_warnings)
 
-            base_meta = dict(extra_meta or {})
             records = [
                 (text, {**base_meta, "source": source, "chunk_index": i})
                 for i, text in enumerate(capped)
@@ -167,7 +246,7 @@ class RAGService:
     ) -> tuple[int, list[str], int]:
         """Index a PDF page-by-page (optimized for 2000+ page specs)."""
         warnings: list[str] = list(initial_warnings or [])
-        base_meta = dict(extra_meta or {})
+        base_meta = self._stamp_meta(extra_meta)
         pending: list[tuple[str, dict[str, Any]]] = []
         pages_indexed = 0
         total_chunks = 0
@@ -274,7 +353,72 @@ class RAGService:
                 )
         return found
 
-    def retrieve(self, query: str, top_k: int | None = None) -> list[dict[str, Any]]:
+    def _semantic_search(
+        self,
+        query: str,
+        k: int,
+        where: dict[str, Any] | None = None,
+        score_boost: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        query_embedding = embed_query(query)
+        kwargs: dict[str, Any] = {
+            "query_embeddings": [query_embedding],
+            "n_results": k,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where:
+            kwargs["where"] = where
+
+        try:
+            results = self._collection.query(**kwargs)
+        except Exception:
+            return []
+
+        chunks: list[dict[str, Any]] = []
+        if not results["documents"] or not results["documents"][0]:
+            return chunks
+
+        for doc, meta, distance in zip(
+            results["documents"][0],
+            results["metadatas"][0] or [],
+            results["distances"][0] or [],
+        ):
+            m = meta or {}
+            base_score = 1 - distance if distance is not None else 0.0
+            chunks.append(
+                {
+                    "text": doc,
+                    "source": m.get("source", "unknown"),
+                    "page_start": m.get("page_start"),
+                    "page_end": m.get("page_end"),
+                    "doc_number": m.get("doc_number"),
+                    "doc_type": m.get("doc_type"),
+                    "score": base_score + score_boost,
+                }
+            )
+        return chunks
+
+    @staticmethod
+    def _merge_chunks(*groups: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for group in groups:
+            for chunk in group:
+                key = f"{chunk['source']}:{chunk.get('page_start')}:{chunk['text'][:80]}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(chunk)
+                if len(merged) >= limit:
+                    return merged
+        return merged
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int | None = None,
+        focus_sources: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         if self.document_count == 0:
             return []
 
@@ -282,57 +426,45 @@ class RAGService:
         if top_k is not None:
             k = min(top_k, k)
 
-        query_embedding = embed_query(query)
-        results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=k,
-            include=["documents", "metadatas", "distances"],
-        )
+        focus = [s for s in (focus_sources or []) if s]
+        semantic: list[dict[str, Any]] = []
 
-        chunks: list[dict[str, Any]] = []
-        if not results["documents"] or not results["documents"][0]:
-            semantic: list[dict[str, Any]] = []
+        if focus:
+            # Session uploads first — ensures spec/submittal comparisons stay consistent.
+            focused = self._semantic_search(
+                query,
+                k,
+                where={"source": {"$in": focus}},
+                score_boost=0.15,
+            )
+            general = self._semantic_search(query, k)
+            semantic = self._merge_chunks(focused, general, limit=k)
         else:
-            semantic = []
-            for doc, meta, distance in zip(
-                results["documents"][0],
-                results["metadatas"][0] or [],
-                results["distances"][0] or [],
-            ):
-                m = meta or {}
-                semantic.append(
-                    {
-                        "text": doc,
-                        "source": m.get("source", "unknown"),
-                        "page_start": m.get("page_start"),
-                        "page_end": m.get("page_end"),
-                        "doc_number": m.get("doc_number"),
-                        "doc_type": m.get("doc_type"),
-                        "score": 1 - distance if distance is not None else None,
-                    }
-                )
+            semantic = self._semantic_search(query, k)
 
         page_refs = self._page_refs(query)
         if page_refs:
             page_chunks = self._chunks_by_pages(page_refs)
-            # Page-specific chunks first, then semantic; dedupe by text prefix.
-            seen: set[str] = set()
-            merged: list[dict[str, Any]] = []
-            for chunk in page_chunks + semantic:
-                key = f"{chunk['source']}:{chunk.get('page_start')}:{chunk['text'][:80]}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged.append(chunk)
-            return merged[: k + len(page_refs)]
+            if focus:
+                page_chunks = [c for c in page_chunks if c["source"] in focus] + [
+                    c for c in page_chunks if c["source"] not in focus
+                ]
+            return self._merge_chunks(page_chunks, semantic, limit=k + len(page_refs))
 
         return semantic
 
-    def query(self, question: str, top_k: int | None = None) -> dict[str, Any]:
+    def query(
+        self,
+        question: str,
+        top_k: int | None = None,
+        focus_sources: list[str] | None = None,
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         if self.document_count == 0:
             return {
-                "answer": generate_general_answer(question),
+                "answer": generate_general_answer(question, history=history),
                 "sources": [],
+                "citations": [],
                 "chunks_used": 0,
                 "context_warnings": [
                     "No documents are indexed yet — this answer comes from the AI's "
@@ -341,11 +473,12 @@ class RAGService:
                 ],
             }
 
-        candidates = self.retrieve(question, top_k=top_k)
+        candidates = self.retrieve(question, top_k=top_k, focus_sources=focus_sources)
         if not candidates:
             return {
-                "answer": generate_general_answer(question),
+                "answer": generate_general_answer(question, history=history),
                 "sources": [],
+                "citations": [],
                 "chunks_used": 0,
                 "context_warnings": [
                     "No relevant sections were found in your uploaded files — this "
@@ -354,15 +487,82 @@ class RAGService:
             }
 
         context, selected, pack_warnings = pack_chunks_for_llm(candidates)
-        answer = generate_answer(question, context)
+        citations = citations_from_chunks(selected)
+        answer = generate_answer(question, context, history=history, citations=citations)
         sources = sorted({c["source"] for c in selected})
+
+        if focus_sources:
+            focused_hits = [c for c in selected if c["source"] in focus_sources]
+            if focused_hits and len(focused_hits) < len(selected):
+                pack_warnings = list(pack_warnings) + [
+                    f"Prioritized {len(focused_hits)} section(s) from this session's "
+                    f"{len(focus_sources)} uploaded file(s)."
+                ]
 
         return {
             "answer": answer,
             "sources": sources,
+            "citations": citations,
             "chunks_used": len(selected),
             "context_warnings": pack_warnings,
         }
+
+    def update_source_metadata(self, source: str, patch: dict[str, str]) -> int:
+        """Update metadata on all chunks for a source (e.g. reclassify upload_origin)."""
+        result = self._collection.get(where={"source": source}, include=["metadatas"])
+        ids = result.get("ids") or []
+        metadatas = result.get("metadatas") or []
+        if not ids:
+            return 0
+
+        updated_meta = []
+        for meta in metadatas:
+            merged = dict(meta or {})
+            merged.update(patch)
+            updated_meta.append(merged)
+
+        self._collection.update(ids=ids, metadatas=updated_meta)
+        return len(ids)
+
+    def reclassify_upload_origins(self) -> int:
+        """Persist correct upload_origin (user vs library) for all indexed sources."""
+        total = self.document_count
+        if total == 0:
+            return 0
+
+        by_source: dict[str, dict[str, Any]] = {}
+        batch = 5_000
+        offset = 0
+        while offset < total:
+            result = self._collection.get(include=["metadatas"], limit=batch, offset=offset)
+            metadatas = result.get("metadatas") or []
+            if not metadatas:
+                break
+            for m in metadatas:
+                meta = m or {}
+                source = meta.get("source", "unknown")
+                if source not in by_source:
+                    by_source[source] = {
+                        "source": source,
+                        "doc_number": meta.get("doc_number"),
+                        "category": meta.get("category"),
+                        "session_id": meta.get("session_id"),
+                        "upload_origin": meta.get("upload_origin"),
+                    }
+                entry = by_source[source]
+                for key in ("doc_number", "category", "session_id", "upload_origin"):
+                    if not entry.get(key) and meta.get(key):
+                        entry[key] = meta[key]
+            offset += batch
+
+        changed = 0
+        for source, entry in by_source.items():
+            stored = (entry.get("upload_origin") or "").lower()
+            correct = classify_upload_origin(source, entry)
+            if stored != correct:
+                if self.update_source_metadata(source, {"upload_origin": correct}):
+                    changed += 1
+        return changed
 
     def reset_index(self) -> None:
         self._chroma.delete_collection(settings.collection_name)

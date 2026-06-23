@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -9,8 +9,10 @@ from pydantic import BaseModel, Field
 
 from app.auth import ApiKeyMiddleware, require_api_key
 from app.config import settings
+from app.citations import publication_url
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
 from app.jobs import get_job, start_background_ingest
+from app.publication_sync import check_publication_sites
 from app.rag import get_rag
 from app.webauthn_auth import WebAuthnMiddleware, router as auth_router
 
@@ -20,11 +22,24 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4000)
     top_k: int | None = Field(default=None, ge=1, le=20)
+    focus_sources: list[str] | None = Field(default=None, max_length=50)
+    history: list[dict[str, str]] | None = Field(default=None, max_length=20)
+
+
+class Citation(BaseModel):
+    source: str
+    doc_number: str | None = None
+    doc_type: str | None = None
+    page: int | None = None
+    page_end: int | None = None
+    label: str
+    url: str
 
 
 class QueryResponse(BaseModel):
     answer: str
     sources: list[str]
+    citations: list[Citation] = []
     chunks_used: int
     context_warnings: list[str] = []
 
@@ -59,7 +74,18 @@ class JobStatusResponse(BaseModel):
 
 class FilesResponse(BaseModel):
     files: list[str]
+    documents: list[dict] = []
     chunks_indexed: int
+
+
+class PublicationSyncResponse(BaseModel):
+    status: str
+    last_sync: str | None = None
+    sites_checked: int = 0
+    links_found: int = 0
+    new_publications: list[dict] = []
+    errors: list[str] = []
+    message: str = ""
 
 
 class ContextLimits(BaseModel):
@@ -105,13 +131,19 @@ def _require_keys() -> None:
 async def lifespan(_: FastAPI):
     if not settings.openai_api_key:
         print("Warning: OPENAI_API_KEY not set — get one at platform.openai.com.")
+    try:
+        changed = get_rag().reclassify_upload_origins()
+        if changed:
+            print(f"Reclassified {changed} document(s) between library and user uploads.")
+    except Exception as exc:
+        print(f"Warning: upload reclassification skipped: {exc}")
     yield
 
 
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.6.0",
+    version="0.7.0",
     lifespan=lifespan,
 )
 
@@ -176,11 +208,29 @@ def health() -> HealthResponse:
 def list_files(request: Request) -> FilesResponse:
     require_api_key(request)
     rag = get_rag()
-    return FilesResponse(files=rag.list_sources(), chunks_indexed=rag.document_count)
+    documents = rag.list_documents()
+    for doc in documents:
+        doc["url"] = publication_url(doc.get("doc_number"), doc.get("source"))
+    return FilesResponse(
+        files=[d["source"] for d in documents],
+        documents=documents,
+        chunks_indexed=rag.document_count,
+    )
+
+
+@app.post("/sync/publications", response_model=PublicationSyncResponse)
+def sync_publications(request: Request, force: bool = False) -> PublicationSyncResponse:
+    require_api_key(request)
+    result = check_publication_sites(force=force)
+    return PublicationSyncResponse(**result)
 
 
 @app.post("/upload", response_model=UploadResponse)
-async def upload_file(request: Request, file: UploadFile = File(...)) -> UploadResponse:
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    session_id: str | None = Form(default=None),
+) -> UploadResponse:
     require_api_key(request)
     _require_keys()
 
@@ -204,9 +254,13 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> UploadR
 
     path = save_upload(content, file.filename)
 
+    extra_meta: dict[str, str] = {"upload_origin": "user"}
+    if session_id:
+        extra_meta["session_id"] = session_id[:64]
+
     use_background, page_count = pdf_needs_background(path)
     if use_background:
-        job = start_background_ingest(path, path.name, page_count)
+        job = start_background_ingest(path, path.name, page_count, extra_meta=extra_meta or None)
         return UploadResponse(
             filename=path.name,
             message=(
@@ -218,7 +272,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> UploadR
             pages_total=page_count,
         )
 
-    result = ingest_path(path, source_name=path.name)
+    result = ingest_path(path, source_name=path.name, extra_meta=extra_meta or None)
 
     if not result.get("files_processed"):
         raise HTTPException(status_code=422, detail=str(result.get("message")))
@@ -255,7 +309,12 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
 def query(request: Request, body: QueryRequest) -> QueryResponse:
     require_api_key(request)
     _require_keys()
-    result = get_rag().query(body.question, top_k=body.top_k)
+    result = get_rag().query(
+        body.question,
+        top_k=body.top_k,
+        focus_sources=body.focus_sources,
+        history=body.history,
+    )
     return QueryResponse(**result)
 
 
@@ -275,6 +334,11 @@ def ingest(request: Request) -> IngestResponse:
 @app.post("/reset")
 def reset_index(request: Request) -> dict[str, str]:
     require_api_key(request)
+    if not settings.allow_index_reset:
+        raise HTTPException(
+            status_code=403,
+            detail="Index reset is disabled. Use server-side admin tools if needed.",
+        )
     _require_keys()
     get_rag().reset_index()
     return {"message": "Vector index cleared."}

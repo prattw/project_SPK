@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     pdf_background_page_threshold: int = 75
     pdf_progress_every_pages: int = 25
     pdf_embed_flush_chunks: int = 250
-    embedding_batch_size: int = 128
+    allow_index_reset: bool = False  # set true only for local admin; never in production UI
 
     @property
     def chroma_path(self) -> Path:

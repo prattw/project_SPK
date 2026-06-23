@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.config import settings
-from app.doc_metadata import infer_doc_metadata
+from app.doc_metadata import infer_doc_metadata, pdf_date_years
 from app.parsers.loaders import SUPPORTED_EXTENSIONS, STORE_ONLY_EXTENSIONS, load_document
 from app.pdf_ingest import count_pdf_pages, iter_pdf_pages, should_index_in_background
 from app.rag import get_rag
@@ -25,6 +25,7 @@ def ingest_path(
     path: Path,
     source_name: str | None = None,
     progress_callback: ProgressCallback | None = None,
+    extra_meta: dict[str, str] | None = None,
 ) -> dict[str, int | str | list[str]]:
     suffix = path.suffix.lower()
     if suffix not in INGESTABLE_EXTENSIONS:
@@ -39,6 +40,13 @@ def ingest_path(
     rag = get_rag()
     rag.delete_source(source)
     doc_meta = infer_doc_metadata(source)
+    merged_meta = {**doc_meta, **(extra_meta or {})}
+    if path.suffix.lower() == ".pdf":
+        pub, mod = pdf_date_years(path)
+        if pub:
+            merged_meta["year_published"] = pub
+        if mod:
+            merged_meta["year_updated"] = mod
 
     if suffix == ".pdf":
         page_iter, pages_total, pdf_warnings = iter_pdf_pages(path)
@@ -48,7 +56,7 @@ def ingest_path(
             pages_total,
             progress_callback=progress_callback,
             initial_warnings=pdf_warnings,
-            extra_meta=doc_meta,
+            extra_meta=merged_meta,
         )
         message = (
             f"Indexed {pages_indexed:,} pages ({count:,} chunks) from {source}."
@@ -73,7 +81,7 @@ def ingest_path(
         }
 
     count, warnings = rag.ingest_documents(
-        [{"source": source, "text": text}], extra_meta=doc_meta
+        [{"source": source, "text": text}], extra_meta=merged_meta
     )
     message = "File indexed successfully."
     if warnings:
@@ -129,7 +137,7 @@ def ingest_directory(data_dir: Path | None = None) -> dict[str, int | list[str] 
     processed: list[str] = []
 
     for path in paths:
-        result = ingest_path(path)
+        result = ingest_path(path, extra_meta={"upload_origin": "library"})
         total_chunks += int(result.get("chunks_indexed", 0))
         all_warnings.extend(list(result.get("warnings", [])))
         processed.extend(list(result.get("files_processed", [])))

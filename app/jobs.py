@@ -22,10 +22,20 @@ class IngestJob:
     chunks_indexed: int = 0
     message: str = ""
     warnings: list[str] = field(default_factory=list)
+    extra_meta: dict[str, str] | None = None
 
 
-def create_job(filename: str, pages_total: int = 0) -> IngestJob:
-    job = IngestJob(id=str(uuid.uuid4()), filename=filename, pages_total=pages_total)
+def create_job(
+    filename: str,
+    pages_total: int = 0,
+    extra_meta: dict[str, str] | None = None,
+) -> IngestJob:
+    job = IngestJob(
+        id=str(uuid.uuid4()),
+        filename=filename,
+        pages_total=pages_total,
+        extra_meta=extra_meta,
+    )
     with _lock:
         _jobs[job.id] = job
     return job
@@ -45,13 +55,23 @@ def _update(job_id: str, **kwargs: Any) -> None:
             setattr(job, key, value)
 
 
-def run_ingest_job(job_id: str, path: Path, source_name: str) -> None:
+def run_ingest_job(
+    job_id: str,
+    path: Path,
+    source_name: str,
+    extra_meta: dict[str, str] | None = None,
+) -> None:
     def on_progress(done: int, total: int) -> None:
         _update(job_id, pages_done=done, pages_total=total, status="running")
 
     try:
         _update(job_id, status="running", message="Indexing…")
-        result = ingest_path(path, source_name, progress_callback=on_progress)
+        result = ingest_path(
+            path,
+            source_name,
+            progress_callback=on_progress,
+            extra_meta=extra_meta,
+        )
         if result.get("files_processed"):
             pages = int(result.get("pages_indexed") or 0)
             existing = get_job(job_id)
@@ -74,11 +94,16 @@ def run_ingest_job(job_id: str, path: Path, source_name: str) -> None:
         _update(job_id, status="error", message=str(exc))
 
 
-def start_background_ingest(path: Path, source_name: str, pages_total: int) -> IngestJob:
-    job = create_job(source_name, pages_total=pages_total)
+def start_background_ingest(
+    path: Path,
+    source_name: str,
+    pages_total: int,
+    extra_meta: dict[str, str] | None = None,
+) -> IngestJob:
+    job = create_job(source_name, pages_total=pages_total, extra_meta=extra_meta)
     thread = threading.Thread(
         target=run_ingest_job,
-        args=(job.id, path, source_name),
+        args=(job.id, path, source_name, extra_meta),
         daemon=True,
     )
     thread.start()
