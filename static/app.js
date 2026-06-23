@@ -3,7 +3,6 @@ const SESSIONS_STORAGE = "spk_sessions";
 const messagesEl = document.getElementById("messages");
 const chatScroll = document.getElementById("chatScroll");
 const welcomeEl = document.getElementById("welcome");
-const libraryListEl = document.getElementById("libraryList");
 const uploadListEl = document.getElementById("uploadList");
 const fileInput = document.getElementById("fileInput");
 const fileInputDocs = document.getElementById("fileInputDocs");
@@ -398,7 +397,7 @@ function showView(name) {
   document.getElementById("view-chat").hidden = name !== "chat";
   document.getElementById("view-library").hidden = name !== "library";
   document.getElementById("view-uploads").hidden = name !== "uploads";
-  if (name === "library" || name === "uploads") refreshFiles();
+  if (name === "uploads") refreshUploads();
 }
 
 document.querySelectorAll(".tab[data-view]").forEach((t) => {
@@ -583,40 +582,6 @@ function formatDocDate(iso) {
   }
 }
 
-function renderLibraryList(container, docs, emptyMessage) {
-  container.innerHTML = "";
-  if (!docs.length) {
-    container.innerHTML = `<div class="library-list-empty">${emptyMessage || "No library documents indexed yet."}</div>`;
-    return;
-  }
-
-  const sorted = [...docs].sort((a, b) => {
-    const an = (a.doc_number || a.source || "").toUpperCase();
-    const bn = (b.doc_number || b.source || "").toUpperCase();
-    return an.localeCompare(bn, undefined, { numeric: true, sensitivity: "base" });
-  });
-
-  sorted.forEach((doc) => {
-    const item = document.createElement("div");
-    item.className = "library-item";
-
-    const num = doc.doc_number || doc.source;
-    const href = doc.url || "#";
-    const title = doc.display_title || doc.title || doc.source;
-    const part = doc.part ? `<span class="lib-part">, ${escapeHtml(doc.part)}</span>` : "";
-    const dateLabel = doc.date_label === "updated" ? "updated" : "published";
-    const dateYear = doc.date_year || doc.year_published || doc.year_updated || "—";
-
-    item.innerHTML =
-      `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(num)}</a>` +
-      `, ${escapeHtml(title)}` +
-      part +
-      `<span class="lib-updated">, ${dateLabel}: ${escapeHtml(String(dateYear))}</span>`;
-
-    container.appendChild(item);
-  });
-}
-
 function renderDocGrid(container, docs, emptyMessage) {
   container.innerHTML = "";
   if (!docs.length) {
@@ -644,33 +609,26 @@ function renderDocGrid(container, docs, emptyMessage) {
   });
 }
 
-async function refreshFiles() {
+async function refreshUploads() {
   try {
     const res = await apiFetch("/files");
     const data = await readJsonResponse(res);
     if (!res.ok) {
-      throw new Error(data.detail || "Could not load document list.");
+      throw new Error(data.detail || "Could not load uploaded documents.");
     }
     const docs = data.documents?.length
       ? data.documents
       : (data.files || []).map((name) => ({ source: name, upload_origin: "library" }));
 
-    const library = docs.filter((d) => d.upload_origin !== "user");
     const uploads = docs.filter((d) => d.upload_origin === "user");
 
-    renderLibraryList(
-      libraryListEl,
-      library,
-      `No library documents indexed yet (${(data.chunks_indexed || 0).toLocaleString()} chunks in index — run bulk ingest to load the USACE corpus).`
-    );
     renderDocGrid(
       uploadListEl,
       uploads,
       "No user uploads yet — upload specs, submittals, or project files to get started."
     );
   } catch (err) {
-    const msg = escapeHtml(err.message || "Could not load documents.");
-    libraryListEl.innerHTML = `<div class="library-list-empty">${msg}</div>`;
+    const msg = escapeHtml(err.message || "Could not load uploaded documents.");
     uploadListEl.innerHTML = `<div class="file-grid-empty">${msg}</div>`;
   }
 }
@@ -739,7 +697,7 @@ async function pollJob(jobId, filename, pagesTotal) {
         `${filename} is ready — ${job.chunks_indexed.toLocaleString()} searchable sections from ${job.pages_done.toLocaleString()} pages.`
       );
       showWarnings(job.warnings, "Indexing");
-      await refreshFiles();
+      await refreshUploads();
       return;
     }
     hideNotice();
@@ -792,7 +750,7 @@ async function uploadFiles(files) {
       addMessage("error", err.message);
     }
   }
-  await refreshFiles();
+  await refreshUploads();
 }
 
 async function handleFiles(files) {
@@ -987,7 +945,7 @@ enrollCodeToggle.addEventListener("click", () => {
 
 async function initApp() {
   await loadLimits();
-  await refreshFiles();
+  await refreshUploads();
 }
 
 async function bootstrap() {
