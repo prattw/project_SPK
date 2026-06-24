@@ -398,6 +398,7 @@ function showView(name) {
   document.getElementById("view-library").hidden = name !== "library";
   document.getElementById("view-uploads").hidden = name !== "uploads";
   if (name === "uploads") refreshUploads();
+  if (name === "library") refreshLibraryLinks();
 }
 
 document.querySelectorAll(".tab[data-view]").forEach((t) => {
@@ -478,7 +479,10 @@ function renderMessage(role, text, sources = [], citations = []) {
       "Citations: " +
       citations
         .slice(0, 12)
-        .map((item) => `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.label)}</a>`)
+        .map(
+          (item) =>
+            `<a href="${escapeHtml(item.url)}"${documentLinkAttrs(item.url)}>${escapeHtml(item.label)}</a>`
+        )
         .join(" · ");
     div.appendChild(c);
   } else if (sources.length) {
@@ -573,6 +577,17 @@ async function loadLimits() {
 
 /* ---------- Files / indexing ---------- */
 
+function isLocalDownloadUrl(url) {
+  return typeof url === "string" && url.startsWith("/download/");
+}
+
+function documentLinkAttrs(url) {
+  if (isLocalDownloadUrl(url)) {
+    return ' download';
+  }
+  return ' target="_blank" rel="noopener"';
+}
+
 function formatDocDate(iso) {
   if (!iso) return "—";
   try {
@@ -601,12 +616,44 @@ function renderDocGrid(container, docs, emptyMessage) {
     const href = doc.url || "#";
     const typeLine = [doc.doc_type, doc.doc_number].filter(Boolean).join(" · ") || "Uploaded file";
     row.innerHTML = `
-      <a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>
+      <a href="${escapeHtml(href)}"${documentLinkAttrs(href)}>${escapeHtml(label)}</a>
       <span class="doc-type">${escapeHtml(typeLine)}</span>
       <span class="doc-date">${escapeHtml(formatDocDate(doc.updated_at || doc.indexed_at))}</span>
     `;
     container.appendChild(row);
   });
+}
+
+async function refreshLibraryLinks() {
+  try {
+    const res = await apiFetch("/files");
+    const data = await readJsonResponse(res);
+    if (!res.ok || !data.documents?.length) return;
+
+    const bySource = new Map(data.documents.map((d) => [d.source, d]));
+    const byDocNumber = new Map(
+      data.documents.filter((d) => d.doc_number).map((d) => [d.doc_number, d])
+    );
+
+    document.querySelectorAll("#libraryList .library-item a").forEach((link) => {
+      const label = link.textContent.trim();
+      const doc = bySource.get(label) || byDocNumber.get(label);
+      if (!doc?.url) return;
+
+      link.href = doc.url;
+      if (isLocalDownloadUrl(doc.url)) {
+        link.setAttribute("download", "");
+        link.removeAttribute("target");
+        link.removeAttribute("rel");
+      } else {
+        link.removeAttribute("download");
+        link.setAttribute("target", "_blank");
+        link.setAttribute("rel", "noopener");
+      }
+    });
+  } catch {
+    /* non-blocking */
+  }
 }
 
 async function refreshUploads() {
@@ -946,6 +993,7 @@ enrollCodeToggle.addEventListener("click", () => {
 async function initApp() {
   await loadLimits();
   await refreshUploads();
+  await refreshLibraryLinks();
 }
 
 async function bootstrap() {

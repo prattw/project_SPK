@@ -11,8 +11,10 @@ from urllib.request import Request, urlopen
 
 from app.config import settings
 from app.doc_metadata import infer_doc_metadata
+from app.usace_publication_sites import USACE_PUBLICATION_CATEGORY_SITES
 
-# Sites listed in README (USACE publications roadmap).
+# Sites listed in README (USACE publications roadmap) plus each USACE Publications
+# category listing page (checked for newly listed documents each session).
 USACE_SYNC_SITES = [
     {
         "name": "USACE Library",
@@ -34,6 +36,7 @@ USACE_SYNC_SITES = [
         "name": "USACE Geospatial Open Data",
         "url": "https://geospatial-usace.opendata.arcgis.com/",
     },
+    *USACE_PUBLICATION_CATEGORY_SITES,
 ]
 
 _PUB_HINT = re.compile(

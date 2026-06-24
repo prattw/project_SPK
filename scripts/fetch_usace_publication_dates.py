@@ -9,7 +9,8 @@ then pipe the JSON output into this script:
 
 Or paste JSON into catalog/usace_publication_dates.json manually.
 
-Browser snippet (DevTools console on publications.usace.army.mil):
+Browser snippet (DevTools console on publications.usace.army.mil).
+Category slugs match app/usace_publication_sites.py:
 
 (async () => {
   const categories = [

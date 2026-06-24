@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.citations import publication_url  # noqa: E402
+from app.downloads import document_link_url  # noqa: E402
 from app.doc_metadata import (  # noqa: E402
     USER_UPLOAD_SOURCES,
     display_title,
@@ -58,7 +58,7 @@ def _entry_html(entry: dict, official_lookup: dict) -> str | None:
         title = official["display_title"]
         date_label = official["date_label"]
         date_year = official["date_year"]
-        url = publication_url(doc_number, filename)
+        url = document_link_url(doc_number, filename, official_lookup=official_lookup)
     else:
         modified = entry.get("modified")
         if modified:
@@ -67,14 +67,16 @@ def _entry_html(entry: dict, official_lookup: dict) -> str | None:
         title = fields.get("display_title") or meta.get("title") or filename
         date_label = fields.get("date_label") or "published"
         date_year = fields.get("date_year") or "—"
-        url = publication_url(doc_number, filename)
+        url = document_link_url(doc_number, filename, official_lookup=official_lookup)
 
     label = doc_number or filename
     part = extract_part(filename)
     part_html = f', <span class="lib-part">{html.escape(part)}</span>' if part else ""
+    download_attr = ' download' if url.startswith("/download/") else ""
+    target_attr = "" if url.startswith("/download/") else ' target="_blank" rel="noopener"'
     return (
         f'<div class="library-item">'
-        f'<a href="{html.escape(url)}" target="_blank" rel="noopener">{html.escape(label)}</a>'
+        f'<a href="{html.escape(url)}"{target_attr}{download_attr}>{html.escape(label)}</a>'
         f", {html.escape(title)}"
         f"{part_html}"
         f'<span class="lib-updated">, {date_label}: {html.escape(str(date_year))}</span>'

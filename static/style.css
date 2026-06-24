@@ -700,6 +700,47 @@ body {
   font-size: 0.78rem;
 }
 
+.library-sources {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.library-sources-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.library-sources-desc {
+  margin: 0 0 0.65rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.library-sources-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem 2.5rem;
+}
+
+.library-sources-list a {
+  color: var(--accent);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.library-sources-list a:hover { text-decoration: underline; }
+
+@media (max-width: 960px) {
+  .library-sources-list { grid-template-columns: 1fr; }
+}
+
 /* Document Library — two-column prose list */
 .library-list {
   display: grid;

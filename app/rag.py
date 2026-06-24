@@ -348,6 +348,9 @@ class RAGService:
                         "source": (meta or {}).get("source", "unknown"),
                         "page_start": (meta or {}).get("page_start"),
                         "page_end": (meta or {}).get("page_end"),
+                        "doc_number": (meta or {}).get("doc_number"),
+                        "doc_type": (meta or {}).get("doc_type"),
+                        "upload_origin": (meta or {}).get("upload_origin"),
                         "score": 1.0,
                     }
                 )
@@ -393,6 +396,7 @@ class RAGService:
                     "page_end": m.get("page_end"),
                     "doc_number": m.get("doc_number"),
                     "doc_type": m.get("doc_type"),
+                    "upload_origin": m.get("upload_origin"),
                     "score": base_score + score_boost,
                 }
             )

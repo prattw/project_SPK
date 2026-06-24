@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import ApiKeyMiddleware, require_api_key
 from app.config import settings
-from app.citations import publication_url
+from app.downloads import document_link_url, guess_media_type, resolve_data_file
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
 from app.jobs import get_job, start_background_ingest
 from app.publication_sync import check_publication_sites
@@ -210,11 +210,35 @@ def list_files(request: Request) -> FilesResponse:
     rag = get_rag()
     documents = rag.list_documents()
     for doc in documents:
-        doc["url"] = publication_url(doc.get("doc_number"), doc.get("source"))
+        doc["url"] = document_link_url(
+            doc.get("doc_number"),
+            doc.get("source"),
+            upload_origin=doc.get("upload_origin"),
+        )
     return FilesResponse(
         files=[d["source"] for d in documents],
         documents=documents,
         chunks_indexed=rag.document_count,
+    )
+
+
+@app.get("/download/{filename}")
+def download_file(request: Request, filename: str) -> FileResponse:
+    require_api_key(request)
+
+    safe = Path(filename).name
+    if not safe or safe != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    path = resolve_data_file(safe)
+    if not path:
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    return FileResponse(
+        path,
+        media_type=guess_media_type(path),
+        filename=safe,
+        content_disposition_type="attachment",
     )
 
 

@@ -55,6 +55,7 @@ def build_citation(
     doc_type: str | None = None,
     page_start: int | None = None,
     page_end: int | None = None,
+    upload_origin: str | None = None,
 ) -> dict[str, str | int | None]:
     page = page_start
     if page_end and page_end != page_start:
@@ -64,6 +65,8 @@ def build_citation(
     else:
         label = citation_label(source, doc_number, page)
 
+    from app.downloads import document_link_url
+
     return {
         "source": source,
         "doc_number": doc_number or None,
@@ -71,7 +74,11 @@ def build_citation(
         "page": page,
         "page_end": page_end if page_end != page_start else None,
         "label": label,
-        "url": publication_url(doc_number, source),
+        "url": document_link_url(
+            doc_number,
+            source,
+            upload_origin=upload_origin,
+        ),
     }
 
 
@@ -94,6 +101,7 @@ def citations_from_chunks(chunks: list[dict]) -> list[dict]:
                 doc_type=chunk.get("doc_type"),
                 page_start=chunk.get("page_start"),
                 page_end=chunk.get("page_end"),
+                upload_origin=chunk.get("upload_origin"),
             )
         )
     return out
