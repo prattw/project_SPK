@@ -62,12 +62,31 @@ def _db() -> sqlite3.Connection:
             public_key    BLOB NOT NULL,
             sign_count    INTEGER NOT NULL DEFAULT 0,
             label         TEXT,
+            role          TEXT NOT NULL DEFAULT 'user',
             created_at    REAL NOT NULL,
             last_used     REAL
         )
         """
     )
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(credentials)").fetchall()}
+    if "role" not in cols:
+        conn.execute("ALTER TABLE credentials ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        role_map = settings.webauthn_roles
+        if role_map:
+            for label, role in role_map.items():
+                conn.execute(
+                    "UPDATE credentials SET role = ? WHERE label = ?",
+                    (role, label),
+                )
     return conn
+
+
+def role_for_label(label: str) -> str | None:
+    """Return configured role for an enrollment label, or None if not allowed."""
+    role_map = settings.webauthn_roles
+    if not role_map:
+        return "admin"
+    return role_map.get(label.strip())
 
 
 def credential_count() -> int:
@@ -84,20 +103,26 @@ def all_credential_ids() -> list[bytes]:
 def get_credential(credential_id_b64: str) -> dict[str, Any] | None:
     with _db() as conn:
         row = conn.execute(
-            "SELECT credential_id, public_key, sign_count, label FROM credentials WHERE credential_id = ?",
+            "SELECT credential_id, public_key, sign_count, label, role FROM credentials WHERE credential_id = ?",
             (credential_id_b64,),
         ).fetchone()
     if not row:
         return None
-    return {"credential_id": row[0], "public_key": row[1], "sign_count": row[2], "label": row[3]}
+    return {
+        "credential_id": row[0],
+        "public_key": row[1],
+        "sign_count": row[2],
+        "label": row[3],
+        "role": row[4] or "user",
+    }
 
 
-def add_credential(credential_id_b64: str, public_key: bytes, sign_count: int, label: str) -> None:
+def add_credential(credential_id_b64: str, public_key: bytes, sign_count: int, label: str, role: str) -> None:
     with _db() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO credentials (credential_id, public_key, sign_count, label, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (credential_id_b64, public_key, sign_count, label, time.time()),
+            "INSERT OR REPLACE INTO credentials (credential_id, public_key, sign_count, label, role, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (credential_id_b64, public_key, sign_count, label, role, time.time()),
         )
 
 
@@ -167,20 +192,53 @@ def _set_cookie(resp: Response, name: str, value: str, max_age: int) -> None:
     )
 
 
-def issue_session(resp: Response, credential_id_b64: str) -> None:
-    token = _serializer("session").dumps({"cid": credential_id_b64})
+def issue_session(resp: Response, credential_id_b64: str, role: str) -> None:
+    token = _serializer("session").dumps({"cid": credential_id_b64, "role": role})
     _set_cookie(resp, SESSION_COOKIE, token, settings.session_max_age_hours * 3600)
 
 
-def is_authenticated(request: Request) -> bool:
+def get_session_auth(request: Request) -> dict[str, Any] | None:
+    """Return authenticated WebAuthn session context, or None."""
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
-        return False
+        return None
     try:
-        _serializer("session").loads(token, max_age=settings.session_max_age_hours * 3600)
-        return True
+        data = _serializer("session").loads(token, max_age=settings.session_max_age_hours * 3600)
     except (BadSignature, SignatureExpired):
-        return False
+        return None
+    cid = data.get("cid")
+    if not cid:
+        return None
+    record = get_credential(cid)
+    if not record:
+        return None
+    role = data.get("role") or record.get("role") or "user"
+    return {
+        "credential_id": cid,
+        "label": record.get("label") or "",
+        "role": role if role in ("admin", "user") else "user",
+    }
+
+
+def effective_role(request: Request) -> str:
+    """Role for authorization checks; local dev without WebAuthn is admin."""
+    if not settings.webauthn_enabled:
+        return "admin"
+    auth = get_session_auth(request)
+    if not auth:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return auth["role"]
+
+
+def require_admin(request: Request) -> None:
+    if effective_role(request) != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+
+def is_authenticated(request: Request) -> bool:
+    if not settings.webauthn_enabled:
+        return True
+    return get_session_auth(request) is not None
 
 
 # ---------------------------------------------------------------- request models
@@ -199,11 +257,15 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/status")
 def auth_status(request: Request) -> dict[str, Any]:
+    auth = get_session_auth(request) if settings.webauthn_enabled else None
     return {
         "enabled": settings.webauthn_enabled,
-        "authenticated": (not settings.webauthn_enabled) or is_authenticated(request),
+        "authenticated": (not settings.webauthn_enabled) or auth is not None,
         "registered_keys": credential_count() if settings.webauthn_enabled else 0,
         "enrollment_open": bool(settings.webauthn_enroll_code),
+        "role": auth["role"] if auth else None,
+        "label": auth["label"] if auth else None,
+        "allowed_labels": list(settings.webauthn_roles.keys()) if settings.webauthn_roles else [],
     }
 
 
@@ -222,6 +284,13 @@ def register_begin(request: Request, body: RegisterBegin) -> Response:
 
     user_id = secrets.token_bytes(16)
     label = (body.label or "Security key").strip()[:80]
+    role = role_for_label(label)
+    if role is None:
+        allowed = ", ".join(settings.webauthn_roles.keys()) or "(none configured)"
+        raise HTTPException(
+            status_code=403,
+            detail=f"Unknown key name. Use one of: {allowed}",
+        )
     origin, rp_id = _ceremony_context(request)
 
     options = generate_registration_options(
@@ -245,6 +314,7 @@ def register_begin(request: Request, body: RegisterBegin) -> Response:
         {
             "challenge": bytes_to_base64url(options.challenge),
             "label": label,
+            "role": role,
             "rp_id": rp_id,
             "origin": origin,
         }
@@ -277,10 +347,16 @@ async def register_complete(request: Request) -> Response:
         raise HTTPException(status_code=400, detail=f"Registration failed: {exc}")
 
     cid_b64 = bytes_to_base64url(verification.credential_id)
-    add_credential(cid_b64, verification.credential_public_key, verification.sign_count, data["label"])
+    add_credential(
+        cid_b64,
+        verification.credential_public_key,
+        verification.sign_count,
+        data["label"],
+        data.get("role") or role_for_label(data["label"]) or "user",
+    )
 
-    resp = JSONResponse({"status": "registered", "label": data["label"]})
-    issue_session(resp, cid_b64)
+    resp = JSONResponse({"status": "registered", "label": data["label"], "role": data.get("role")})
+    issue_session(resp, cid_b64, data.get("role") or "user")
     resp.delete_cookie(CHALLENGE_COOKIE, path="/")
     return resp
 
@@ -342,8 +418,9 @@ async def login_complete(request: Request) -> Response:
         raise HTTPException(status_code=400, detail=f"Login failed: {exc}")
 
     update_sign_count(cid_b64, verification.new_sign_count)
-    resp = JSONResponse({"status": "authenticated", "label": record["label"]})
-    issue_session(resp, cid_b64)
+    role = record.get("role") or "user"
+    resp = JSONResponse({"status": "authenticated", "label": record["label"], "role": role})
+    issue_session(resp, cid_b64, role)
     resp.delete_cookie(CHALLENGE_COOKIE, path="/")
     return resp
 

@@ -36,6 +36,8 @@ const aboutModal = document.getElementById("aboutModal");
 const helpModal = document.getElementById("helpModal");
 
 let authRequired = false;
+let userRole = "admin";
+let authLabel = "";
 
 /* ---------- Authenticated fetch (cookie session) ---------- */
 
@@ -597,16 +599,20 @@ function formatDocDate(iso) {
   }
 }
 
-function renderDocGrid(container, docs, emptyMessage) {
+function renderDocGrid(container, docs, emptyMessage, options = {}) {
+  const { deletable = false } = options;
   container.innerHTML = "";
   if (!docs.length) {
     container.innerHTML = `<div class="file-grid-empty">${emptyMessage}</div>`;
     return;
   }
 
+  container.classList.toggle("file-grid-deletable", deletable);
   const header = document.createElement("div");
   header.className = "file-grid-header";
-  header.innerHTML = "<span>Document</span><span>Type / Number</span><span>Updated</span>";
+  header.innerHTML = deletable
+    ? "<span>Document</span><span>Type / Number</span><span>Updated</span><span></span>"
+    : "<span>Document</span><span>Type / Number</span><span>Updated</span>";
   container.appendChild(header);
 
   docs.forEach((doc) => {
@@ -615,13 +621,33 @@ function renderDocGrid(container, docs, emptyMessage) {
     const label = doc.doc_number || doc.source;
     const href = doc.url || "#";
     const typeLine = [doc.doc_type, doc.doc_number].filter(Boolean).join(" · ") || "Uploaded file";
+    const deleteBtn = deletable
+      ? `<button type="button" class="doc-delete" title="Remove from uploads" data-source="${escapeHtml(doc.source)}">×</button>`
+      : "";
     row.innerHTML = `
       <a href="${escapeHtml(href)}"${documentLinkAttrs(href)}>${escapeHtml(label)}</a>
       <span class="doc-type">${escapeHtml(typeLine)}</span>
       <span class="doc-date">${escapeHtml(formatDocDate(doc.updated_at || doc.indexed_at))}</span>
+      ${deleteBtn}
     `;
+    if (deletable) {
+      row.querySelector(".doc-delete")?.addEventListener("click", () => deleteUpload(doc.source));
+    }
     container.appendChild(row);
   });
+}
+
+async function deleteUpload(source) {
+  if (!source || !confirm(`Remove "${source}" from your uploads and the search index?`)) return;
+  try {
+    const res = await apiFetch(`/files/${encodeURIComponent(source)}`, { method: "DELETE" });
+    const data = await readJsonResponse(res);
+    if (!res.ok) throw new Error(data.detail || "Delete failed.");
+    showNotice(data.message || "File removed.", "info");
+    await refreshUploads();
+  } catch (err) {
+    showNotice(err.message || "Could not delete file.", "error");
+  }
 }
 
 async function refreshLibraryLinks() {
@@ -672,7 +698,8 @@ async function refreshUploads() {
     renderDocGrid(
       uploadListEl,
       uploads,
-      "No user uploads yet — upload specs, submittals, or project files to get started."
+      "No user uploads yet — upload specs, submittals, or project files to get started.",
+      { deletable: userRole === "admin" || userRole === "user" }
     );
   } catch (err) {
     const msg = escapeHtml(err.message || "Could not load uploaded documents.");
@@ -1003,6 +1030,20 @@ async function bootstrap() {
     const status = await res.json();
     if (status.enabled && !status.authenticated) {
       showAuthGate();
+      userRole = "user";
+      const enrollDetails = document.querySelector(".auth-enroll");
+      if (enrollDetails && !status.enrollment_open) {
+        enrollDetails.hidden = true;
+      } else if (enrollDetails) {
+        enrollDetails.hidden = false;
+        const hint = document.getElementById("enrollHint");
+        if (hint && status.allowed_labels?.length) {
+          hint.textContent =
+            "Enter the enrollment code and use the exact key name: " +
+            status.allowed_labels.join(" or ") +
+            ". (WebAuthn identifies keys by name, not serial number.)";
+        }
+      }
       const host = location.hostname;
       if (host === "localhost" || host === "127.0.0.1") {
         const hint = document.getElementById("enrollHint");
@@ -1015,6 +1056,10 @@ async function bootstrap() {
       // Still load public limits/version so the badge is populated.
       await loadLimits();
       return;
+    }
+    if (status.role) {
+      userRole = status.role;
+      authLabel = status.label || "";
     }
   } catch {
     /* if status check fails, fall through and try to load the app */

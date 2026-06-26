@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     webauthn_rp_name: str = "Project SPK"
     webauthn_origin: str = ""  # e.g. "https://projectspk-production.up.railway.app"
     webauthn_enroll_code: str = ""  # admin shares with authorized users to enroll a key
+    # Comma-separated label:role pairs, e.g. "Admin:admin,User_1:user". Labels must match
+    # enrollment names exactly. WebAuthn cannot read YubiKey serial numbers — use fixed labels.
+    webauthn_role_map: str = "Admin:admin,User_1:user"
     session_secret: str = ""  # signs session/challenge cookies; set a long random value
     session_max_age_hours: int = 12
     auth_db_path: str = "./auth.db"
@@ -75,6 +78,24 @@ class Settings(BaseSettings):
         if not self.webauthn_origin:
             return []
         return [o.strip() for o in self.webauthn_origin.split(",") if o.strip()]
+
+    @property
+    def webauthn_roles(self) -> dict[str, str]:
+        """Map enrollment label -> role (admin or user)."""
+        out: dict[str, str] = {}
+        raw = (self.webauthn_role_map or "").strip()
+        if not raw:
+            return out
+        for part in raw.split(","):
+            piece = part.strip()
+            if not piece or ":" not in piece:
+                continue
+            label, role = piece.split(":", 1)
+            label = label.strip()
+            role = role.strip().lower()
+            if label and role in ("admin", "user"):
+                out[label] = role
+        return out
 
 
 settings = Settings()
