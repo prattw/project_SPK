@@ -82,11 +82,13 @@ def pack_chunks_for_llm(
     *,
     focus_sources: list[str] | None = None,
     min_library_chunks: int = 0,
+    max_focus_chunks_per_source: int | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[str]]:
     """
     Select chunks for the LLM prompt without exceeding max_context_chars.
     Spreads selections across sources so multi-document comparison stays fair.
-    When session uploads are focused, reserves space for Document Library chunks.
+    When session uploads are focused, reserves space for Document Library chunks
+    and caps how many chunks each uploaded file may consume.
     """
     warnings: list[str] = []
     if not chunks:
@@ -94,6 +96,7 @@ def pack_chunks_for_llm(
 
     budget = settings.max_context_chars
     per_source_cap = settings.max_chunks_per_source
+    focus_cap = max_focus_chunks_per_source or per_source_cap
     focus_set = set(focus_sources or [])
 
     ranked = sorted(
@@ -126,7 +129,8 @@ def pack_chunks_for_llm(
             continue
 
         source = str(chunk.get("source", "unknown"))
-        if per_source.get(source, 0) >= per_source_cap:
+        cap = focus_cap if source in focus_set else per_source_cap
+        if per_source.get(source, 0) >= cap:
             continue
 
         block = format_chunk_for_prompt(chunk)

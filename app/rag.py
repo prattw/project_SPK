@@ -15,7 +15,14 @@ from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
 from app.doc_metadata import classify_upload_origin, enrich_library_fields
 from app.embeddings import embed_query, embed_texts
-from app.section_search import detect_page_section, extract_section_numbers, normalize_section_number, section_search_variants
+from app.regulatory_retrieval import library_subqueries, question_needs_library_regulations
+from app.section_search import (
+    detect_page_section,
+    extract_section_numbers,
+    normalize_section_number,
+    section_search_variants,
+    sections_from_filenames,
+)
 
 PAGE_REF_PATTERN = re.compile(
     r"\b(?:page|pg|p)\s*\.?\s*(\d{1,5})\b",
@@ -28,6 +35,7 @@ class RAGService:
         settings.chroma_path.mkdir(parents=True, exist_ok=True)
         self._chroma = chromadb.PersistentClient(path=str(settings.chroma_path))
         self._collection = self._get_or_create_collection()
+        self._library_sources_cache: list[str] | None = None
 
     def _get_or_create_collection(self) -> Collection:
         return self._chroma.get_or_create_collection(
@@ -558,6 +566,110 @@ class RAGService:
                     return merged
         return merged
 
+    def _library_source_names(self) -> list[str]:
+        if self._library_sources_cache is not None:
+            return self._library_sources_cache
+        names = [
+            doc["source"]
+            for doc in self.list_documents()
+            if doc.get("upload_origin") == "library"
+        ]
+        self._library_sources_cache = names
+        return names
+
+    def _retrieve_library_regulatory(
+        self,
+        question: str,
+        focus_set: set[str],
+        *,
+        slots: int,
+    ) -> list[dict[str, Any]]:
+        """Dedicated passes over the Document Library for UFC / ER / US Code, etc."""
+        if slots <= 0 or self.document_count == 0:
+            return []
+
+        library_names = set(self._library_source_names()) - focus_set
+        if not library_names:
+            broad = self._semantic_search(question, slots * 2)
+            return [c for c in broad if c.get("source") not in focus_set][:slots]
+
+        found: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        per_query = max(2, settings.library_subquery_slots)
+
+        for subquery in library_subqueries(question):
+            hits = self._semantic_search(subquery, per_query * 3)
+            for chunk in hits:
+                if chunk.get("source") not in library_names:
+                    continue
+                key = f"{chunk['source']}:{chunk.get('page_start')}:{chunk['text'][:80]}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                chunk["score"] = (chunk.get("score") or 0) + 0.12
+                found.append(chunk)
+                if len(found) >= slots:
+                    return found[:slots]
+
+        return found[:slots]
+
+    def _expand_section_neighbors(
+        self,
+        section_chunks: list[dict[str, Any]],
+        *,
+        page_span: int = 12,
+    ) -> list[dict[str, Any]]:
+        """Pull nearby pages from the same spec after a section header is found."""
+        if not section_chunks:
+            return []
+
+        expanded: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for seed in section_chunks:
+            source = seed.get("source")
+            page = seed.get("page_start")
+            if not source or page is None:
+                continue
+            try:
+                result = self._collection.get(
+                    where={
+                        "$and": [
+                            {"source": {"$eq": source}},
+                            {"page_start": {"$gte": int(page)}},
+                            {"page_start": {"$lte": int(page) + page_span}},
+                        ]
+                    },
+                    include=["documents", "metadatas"],
+                    limit=20,
+                )
+            except Exception:
+                continue
+
+            for doc_id, doc, meta in zip(
+                result.get("ids") or [],
+                result.get("documents") or [],
+                result.get("metadatas") or [],
+            ):
+                if doc_id in seen:
+                    continue
+                seen.add(doc_id)
+                m = meta or {}
+                expanded.append(
+                    {
+                        "text": doc,
+                        "source": m.get("source", source),
+                        "page_start": m.get("page_start"),
+                        "page_end": m.get("page_end"),
+                        "doc_number": m.get("doc_number"),
+                        "doc_type": m.get("doc_type"),
+                        "upload_origin": m.get("upload_origin"),
+                        "spec_section": m.get("spec_section"),
+                        "score": 1.3,
+                    }
+                )
+        return expanded
+
     def retrieve(
         self,
         query: str,
@@ -569,14 +681,18 @@ class RAGService:
         if self.document_count == 0:
             return []
 
-        k = min(settings.max_retrieval_candidates, self.document_count)
+        focus = [s for s in (focus_sources or []) if s]
+        focus_set = set(focus)
+        use_library = include_library and bool(focus)
+        k = min(
+            settings.max_retrieval_candidates_with_library if use_library else settings.max_retrieval_candidates,
+            self.document_count,
+        )
         if top_k is not None:
             k = min(top_k, k)
 
-        focus = [s for s in (focus_sources or []) if s]
-        focus_set = set(focus)
-        library_slots = settings.library_retrieval_slots if (focus and include_library) else 0
-        focus_k = max(k - library_slots, k // 2) if library_slots else k
+        library_slots = settings.library_retrieval_slots if use_library else 0
+        focus_k = max(k - library_slots, k // 3) if library_slots else k
 
         if focus and not include_library:
             semantic = self._semantic_search(
@@ -592,21 +708,32 @@ class RAGService:
                 where={"source": {"$in": focus}},
                 score_boost=0.15,
             )
+            library_reg = self._retrieve_library_regulatory(query, focus_set, slots=library_slots)
             broad = self._semantic_search(query, k)
-            library = [c for c in broad if c.get("source") not in focus_set][:library_slots]
-            for chunk in library:
-                chunk["score"] = (chunk.get("score") or 0) + 0.05
-            semantic = self._merge_chunks(focused, library, broad, limit=k)
+            library_broad = [c for c in broad if c.get("source") not in focus_set][: max(4, library_slots // 3)]
+            semantic = self._merge_chunks(focused, library_reg, library_broad, broad, limit=k)
         else:
             semantic = self._semantic_search(query, k)
 
         section_refs = self._section_refs(query, explicit_sections)
+        if focus:
+            for sec in sections_from_filenames(focus):
+                if sec not in section_refs:
+                    section_refs.append(sec)
+
         if section_refs:
             section_chunks = self._chunks_by_sections(
                 section_refs,
                 focus_sources=focus or None,
                 include_library=include_library,
             )
+            if focus and not section_chunks:
+                section_chunks = self._chunks_by_sections(
+                    section_refs,
+                    focus_sources=None,
+                    include_library=True,
+                )
+            section_chunks = self._expand_section_neighbors(section_chunks)
             extra = min(len(section_chunks), settings.section_search_limit)
             semantic = self._merge_chunks(section_chunks, semantic, limit=k + extra)
 
@@ -670,13 +797,35 @@ class RAGService:
                 if focus_sources and include_library
                 else 0
             ),
+            max_focus_chunks_per_source=(
+                settings.max_focus_chunks_per_source if focus_sources else settings.max_chunks_per_source
+            ),
         )
         citations = citations_from_chunks(selected)
         answer = generate_answer(question, context, history=history, citations=citations)
         sources = sorted({c["source"] for c in selected})
 
         pack_warnings = list(pack_warnings)
+        if focus_sources and include_library:
+            lib_in_selected = [c for c in selected if c.get("source") not in set(focus_sources)]
+            lib_names = sorted({c.get("source") for c in lib_in_selected})
+            if lib_names:
+                pack_warnings.append(
+                    "Document Library sources in this answer: "
+                    + ", ".join(lib_names[:8])
+                    + ("…" if len(lib_names) > 8 else "")
+                )
+            elif question_needs_library_regulations(question):
+                pack_warnings.append(
+                    "No Document Library (UFC/ER/US Code) sections fit the context budget — "
+                    "try a follow-up question asking only about applicable USACE/UFC requirements."
+                )
+
         section_hits = self._section_refs(question, explicit_sections)
+        if focus_sources:
+            for sec in sections_from_filenames(focus_sources):
+                if sec not in section_hits:
+                    section_hits.append(sec)
         if section_hits:
             section_in_context = {
                 norm

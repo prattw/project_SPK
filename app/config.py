@@ -45,8 +45,10 @@ class Settings(BaseSettings):
 
     retrieval_top_k: int = 8
     max_retrieval_candidates: int = 40
+    max_retrieval_candidates_with_library: int = 80
     max_context_chars: int = 120_000
     max_chunks_per_source: int = 8
+    max_focus_chunks_per_source: int = 4
 
     max_extract_chars_per_file: int = 12_000_000
     max_chunks_per_file: int = 6_000
@@ -57,9 +59,10 @@ class Settings(BaseSettings):
     allow_index_reset: bool = False  # set true only for local admin; never in production UI
 
     # Retrieval tuning for spec/submittal comparison sessions
-    library_retrieval_slots: int = 12
-    section_search_limit: int = 24
-    min_library_chunks_in_context: int = 6
+    library_retrieval_slots: int = 24
+    section_search_limit: int = 40
+    min_library_chunks_in_context: int = 12
+    library_subquery_slots: int = 8
 
     @property
     def chroma_path(self) -> Path:

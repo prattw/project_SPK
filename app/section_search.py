@@ -77,3 +77,16 @@ def detect_page_section(page_text: str, current: str) -> str:
             if norm:
                 latest = norm
     return latest
+
+
+def sections_from_filenames(filenames: list[str]) -> list[str]:
+    """Infer MasterFormat sections referenced by uploaded file names."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for name in filenames:
+        for match in SECTION_NUMBER_RE.finditer(name.replace("-", " ")):
+            norm = f"{match.group(1)} {match.group(2)} {match.group(3)}"
+            if norm not in seen:
+                seen.add(norm)
+                found.append(norm)
+    return found
