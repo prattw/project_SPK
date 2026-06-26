@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     pdf_embed_flush_chunks: int = 250
     allow_index_reset: bool = False  # set true only for local admin; never in production UI
 
+    # Retrieval tuning for spec/submittal comparison sessions
+    library_retrieval_slots: int = 12
+    section_search_limit: int = 24
+    min_library_chunks_in_context: int = 6
+
     @property
     def chroma_path(self) -> Path:
         return Path(self.chroma_persist_dir)

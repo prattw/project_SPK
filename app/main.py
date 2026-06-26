@@ -28,6 +28,8 @@ class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4000)
     top_k: int | None = Field(default=None, ge=1, le=20)
     focus_sources: list[str] | None = Field(default=None, max_length=50)
+    include_library: bool = True
+    section_numbers: list[str] | None = Field(default=None, max_length=10)
     history: list[dict[str, str]] | None = Field(default=None, max_length=20)
 
 
@@ -366,6 +368,8 @@ def query(request: Request, body: QueryRequest) -> QueryResponse:
         body.question,
         top_k=body.top_k,
         focus_sources=body.focus_sources,
+        include_library=body.include_library,
+        explicit_sections=body.section_numbers,
         history=body.history,
     )
     return QueryResponse(**result)

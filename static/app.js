@@ -12,7 +12,7 @@ const sendBtn = document.getElementById("sendBtn");
 const noticeBar = document.getElementById("noticeBar");
 const activeJobsEl = document.getElementById("activeJobs");
 const limitsListEl = document.getElementById("limitsList");
-const authGate = document.getElementById("authGate");
+const includeLibraryEl = document.getElementById("includeLibrary");
 const loginBtn = document.getElementById("loginBtn");
 const enrollBtn = document.getElementById("enrollBtn");
 const enrollLabel = document.getElementById("enrollLabel");
@@ -910,7 +910,7 @@ async function askQuestion(question) {
   setLoading(true);
   hideNotice();
 
-  const payload = { question };
+  const payload = { question, include_library: includeLibraryEl?.checked !== false };
   const focus = sessionFocusSources();
   if (focus?.length) payload.focus_sources = focus;
   const history = sessionHistory();

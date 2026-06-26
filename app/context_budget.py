@@ -63,20 +63,30 @@ def format_chunk_for_prompt(chunk: dict) -> str:
 
     page_start = chunk.get("page_start")
     page_end = chunk.get("page_end")
+    spec_section = chunk.get("spec_section")
+    section_note = f", Section {spec_section}" if spec_section else ""
     if page_start is not None:
         if page_end and page_end != page_start:
-            label = f"{name} (pages {page_start}–{page_end})"
+            label = f"{name} (pages {page_start}–{page_end}{section_note})"
         else:
-            label = f"{name} (page {page_start})"
+            label = f"{name} (page {page_start}{section_note})"
+    elif spec_section:
+        label = f"{name} (Section {spec_section})"
     else:
         label = name
     return f"[{label}]\n{chunk['text']}"
 
 
-def pack_chunks_for_llm(chunks: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[str]]:
+def pack_chunks_for_llm(
+    chunks: list[dict[str, Any]],
+    *,
+    focus_sources: list[str] | None = None,
+    min_library_chunks: int = 0,
+) -> tuple[str, list[dict[str, Any]], list[str]]:
     """
     Select chunks for the LLM prompt without exceeding max_context_chars.
     Spreads selections across sources so multi-document comparison stays fair.
+    When session uploads are focused, reserves space for Document Library chunks.
     """
     warnings: list[str] = []
     if not chunks:
@@ -84,18 +94,37 @@ def pack_chunks_for_llm(chunks: list[dict[str, Any]]) -> tuple[str, list[dict[st
 
     budget = settings.max_context_chars
     per_source_cap = settings.max_chunks_per_source
+    focus_set = set(focus_sources or [])
 
-    # Higher score first; stable tie-break by source name.
     ranked = sorted(
         chunks,
         key=lambda c: (-(c.get("score") or 0), str(c.get("source", ""))),
     )
 
-    selected: list[dict[str, Any]] = []
+    preselected: list[dict[str, Any]] = []
+    if min_library_chunks > 0 and focus_set:
+        library_ranked = [c for c in ranked if c.get("source") not in focus_set]
+        preselected = library_ranked[:min_library_chunks]
+
+    selected: list[dict[str, Any]] = list(preselected)
     used_chars = 0
     per_source: dict[str, int] = {}
 
+    for chunk in preselected:
+        block = format_chunk_for_prompt(chunk)
+        used_chars += len(block) + (10 if used_chars else 0)
+        source = str(chunk.get("source", "unknown"))
+        per_source[source] = per_source.get(source, 0) + 1
+
+    pre_keys = {
+        f"{c.get('source')}:{c.get('page_start')}:{c.get('text', '')[:80]}" for c in preselected
+    }
+
     for chunk in ranked:
+        key = f"{chunk.get('source')}:{chunk.get('page_start')}:{chunk.get('text', '')[:80]}"
+        if key in pre_keys:
+            continue
+
         source = str(chunk.get("source", "unknown"))
         if per_source.get(source, 0) >= per_source_cap:
             continue
@@ -118,8 +147,12 @@ def pack_chunks_for_llm(chunks: list[dict[str, Any]]) -> tuple[str, list[dict[st
             f"({used_chars:,} / {budget:,} character budget)."
         )
 
+    if preselected:
+        warnings.append(
+            f"Reserved {len(preselected)} section(s) from the Document Library for USACE/UFC context."
+        )
+
     if not selected and ranked:
-        # Ensure at least one chunk fits by trimming the top chunk.
         top = ranked[0]
         source = str(top.get("source", "unknown"))
         room = budget - len(f"[{source}]\n")

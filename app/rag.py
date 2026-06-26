@@ -15,7 +15,7 @@ from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
 from app.doc_metadata import classify_upload_origin, enrich_library_fields
 from app.embeddings import embed_query, embed_texts
-from app.llm import generate_answer, generate_general_answer
+from app.section_search import detect_page_section, extract_section_numbers, normalize_section_number, section_search_variants
 
 PAGE_REF_PATTERN = re.compile(
     r"\b(?:page|pg|p)\s*\.?\s*(\d{1,5})\b",
@@ -157,6 +157,141 @@ class RAGService:
     def _page_refs(question: str) -> list[int]:
         return sorted({int(m.group(1)) for m in PAGE_REF_PATTERN.finditer(question)})
 
+    @staticmethod
+    def _section_refs(question: str, explicit: list[str] | None = None) -> list[str]:
+        found = extract_section_numbers(question)
+        for raw in explicit or []:
+            norm = normalize_section_number(raw)
+            if norm and norm not in found:
+                found.append(norm)
+        return found
+
+    def _append_get_results(
+        self,
+        result: dict[str, Any],
+        found: list[dict[str, Any]],
+        seen: set[str],
+        *,
+        score: float,
+    ) -> None:
+        for doc_id, doc, meta in zip(
+            result.get("ids") or [],
+            result.get("documents") or [],
+            result.get("metadatas") or [],
+        ):
+            if doc_id in seen:
+                continue
+            seen.add(doc_id)
+            m = meta or {}
+            found.append(
+                {
+                    "text": doc,
+                    "source": m.get("source", "unknown"),
+                    "page_start": m.get("page_start"),
+                    "page_end": m.get("page_end"),
+                    "doc_number": m.get("doc_number"),
+                    "doc_type": m.get("doc_type"),
+                    "upload_origin": m.get("upload_origin"),
+                    "spec_section": m.get("spec_section"),
+                    "score": score,
+                }
+            )
+
+    def _chunks_by_sections(
+        self,
+        sections: list[str],
+        *,
+        focus_sources: list[str] | None = None,
+        include_library: bool = True,
+    ) -> list[dict[str, Any]]:
+        if not sections or self.document_count == 0:
+            return []
+
+        found: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        per_section = max(4, settings.section_search_limit // max(len(sections), 1))
+        focus = [s for s in (focus_sources or []) if s]
+        focus_set = set(focus)
+
+        def search_scope(library_only: bool) -> list[str] | None:
+            if library_only:
+                return None
+            return focus if focus else None
+
+        def matches_scope(source: str, library_only: bool) -> bool:
+            if not focus_set:
+                return True
+            in_focus = source in focus_set
+            return (not in_focus) if library_only else in_focus
+
+        scopes: list[tuple[bool, float]] = [(False, 1.25)]
+        if focus and include_library:
+            scopes.append((True, 1.15))
+        elif not focus:
+            scopes = [(False, 1.2)]
+
+        for section in sections:
+            norm = normalize_section_number(section)
+            if not norm:
+                continue
+
+            for library_only, score in scopes:
+                source_filter = search_scope(library_only)
+                try:
+                    where: dict[str, Any] = {"spec_section": {"$eq": norm}}
+                    if source_filter:
+                        where = {"$and": [where, {"source": {"$in": source_filter}}]}
+                    result = self._collection.get(
+                        where=where,
+                        include=["documents", "metadatas"],
+                        limit=per_section,
+                    )
+                    for doc_id, doc, meta in zip(
+                        result.get("ids") or [],
+                        result.get("documents") or [],
+                        result.get("metadatas") or [],
+                    ):
+                        src = (meta or {}).get("source", "unknown")
+                        if not matches_scope(src, library_only):
+                            continue
+                        self._append_get_results(
+                            {"ids": [doc_id], "documents": [doc], "metadatas": [meta]},
+                            found,
+                            seen,
+                            score=score,
+                        )
+                except Exception:
+                    pass
+
+                for needle in section_search_variants(norm):
+                    try:
+                        kwargs: dict[str, Any] = {
+                            "where_document": {"$contains": needle},
+                            "include": ["documents", "metadatas"],
+                            "limit": per_section,
+                        }
+                        if source_filter:
+                            kwargs["where"] = {"source": {"$in": source_filter}}
+                        result = self._collection.get(**kwargs)
+                        for doc_id, doc, meta in zip(
+                            result.get("ids") or [],
+                            result.get("documents") or [],
+                            result.get("metadatas") or [],
+                        ):
+                            src = (meta or {}).get("source", "unknown")
+                            if not matches_scope(src, library_only):
+                                continue
+                            self._append_get_results(
+                                {"ids": [doc_id], "documents": [doc], "metadatas": [meta]},
+                                found,
+                                seen,
+                                score=score,
+                            )
+                    except Exception:
+                        continue
+
+        return found[: settings.section_search_limit]
+
     def _upsert_batch(
         self,
         source: str,
@@ -253,6 +388,7 @@ class RAGService:
         chunk_budget = settings.max_chunks_per_file
         flush_size = settings.pdf_embed_flush_chunks
         every = settings.pdf_progress_every_pages
+        current_spec_section = ""
 
         def flush() -> None:
             nonlocal pending, total_chunks
@@ -270,6 +406,7 @@ class RAGService:
             if not text:
                 continue
 
+            current_spec_section = detect_page_section(text, current_spec_section)
             body = f"Page {page_num} of {source}\n{text}"
             subchunks = self.chunk_text(
                 body,
@@ -293,6 +430,7 @@ class RAGService:
                             "page_start": page_num,
                             "page_end": page_num,
                             "chunk_index": chunk_index,
+                            **({"spec_section": current_spec_section} if current_spec_section else {}),
                         },
                     )
                 )
@@ -342,15 +480,17 @@ class RAGService:
                 if doc_id in seen_ids:
                     continue
                 seen_ids.add(doc_id)
+                m = meta or {}
                 found.append(
                     {
                         "text": doc,
-                        "source": (meta or {}).get("source", "unknown"),
-                        "page_start": (meta or {}).get("page_start"),
-                        "page_end": (meta or {}).get("page_end"),
-                        "doc_number": (meta or {}).get("doc_number"),
-                        "doc_type": (meta or {}).get("doc_type"),
-                        "upload_origin": (meta or {}).get("upload_origin"),
+                        "source": m.get("source", "unknown"),
+                        "page_start": m.get("page_start"),
+                        "page_end": m.get("page_end"),
+                        "doc_number": m.get("doc_number"),
+                        "doc_type": m.get("doc_type"),
+                        "upload_origin": m.get("upload_origin"),
+                        "spec_section": m.get("spec_section"),
                         "score": 1.0,
                     }
                 )
@@ -397,6 +537,7 @@ class RAGService:
                     "doc_number": m.get("doc_number"),
                     "doc_type": m.get("doc_type"),
                     "upload_origin": m.get("upload_origin"),
+                    "spec_section": m.get("spec_section"),
                     "score": base_score + score_boost,
                 }
             )
@@ -422,6 +563,8 @@ class RAGService:
         query: str,
         top_k: int | None = None,
         focus_sources: list[str] | None = None,
+        include_library: bool = True,
+        explicit_sections: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if self.document_count == 0:
             return []
@@ -431,27 +574,48 @@ class RAGService:
             k = min(top_k, k)
 
         focus = [s for s in (focus_sources or []) if s]
-        semantic: list[dict[str, Any]] = []
+        focus_set = set(focus)
+        library_slots = settings.library_retrieval_slots if (focus and include_library) else 0
+        focus_k = max(k - library_slots, k // 2) if library_slots else k
 
-        if focus:
-            # Session uploads first — ensures spec/submittal comparisons stay consistent.
-            focused = self._semantic_search(
+        if focus and not include_library:
+            semantic = self._semantic_search(
                 query,
                 k,
                 where={"source": {"$in": focus}},
                 score_boost=0.15,
             )
-            general = self._semantic_search(query, k)
-            semantic = self._merge_chunks(focused, general, limit=k)
+        elif focus:
+            focused = self._semantic_search(
+                query,
+                focus_k,
+                where={"source": {"$in": focus}},
+                score_boost=0.15,
+            )
+            broad = self._semantic_search(query, k)
+            library = [c for c in broad if c.get("source") not in focus_set][:library_slots]
+            for chunk in library:
+                chunk["score"] = (chunk.get("score") or 0) + 0.05
+            semantic = self._merge_chunks(focused, library, broad, limit=k)
         else:
             semantic = self._semantic_search(query, k)
+
+        section_refs = self._section_refs(query, explicit_sections)
+        if section_refs:
+            section_chunks = self._chunks_by_sections(
+                section_refs,
+                focus_sources=focus or None,
+                include_library=include_library,
+            )
+            extra = min(len(section_chunks), settings.section_search_limit)
+            semantic = self._merge_chunks(section_chunks, semantic, limit=k + extra)
 
         page_refs = self._page_refs(query)
         if page_refs:
             page_chunks = self._chunks_by_pages(page_refs)
             if focus:
-                page_chunks = [c for c in page_chunks if c["source"] in focus] + [
-                    c for c in page_chunks if c["source"] not in focus
+                page_chunks = [c for c in page_chunks if c["source"] in focus_set] + [
+                    c for c in page_chunks if c["source"] not in focus_set
                 ]
             return self._merge_chunks(page_chunks, semantic, limit=k + len(page_refs))
 
@@ -462,6 +626,8 @@ class RAGService:
         question: str,
         top_k: int | None = None,
         focus_sources: list[str] | None = None,
+        include_library: bool = True,
+        explicit_sections: list[str] | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         if self.document_count == 0:
@@ -477,7 +643,13 @@ class RAGService:
                 ],
             }
 
-        candidates = self.retrieve(question, top_k=top_k, focus_sources=focus_sources)
+        candidates = self.retrieve(
+            question,
+            top_k=top_k,
+            focus_sources=focus_sources,
+            include_library=include_library,
+            explicit_sections=explicit_sections,
+        )
         if not candidates:
             return {
                 "answer": generate_general_answer(question, history=history),
@@ -490,10 +662,40 @@ class RAGService:
                 ],
             }
 
-        context, selected, pack_warnings = pack_chunks_for_llm(candidates)
+        context, selected, pack_warnings = pack_chunks_for_llm(
+            candidates,
+            focus_sources=focus_sources,
+            min_library_chunks=(
+                settings.min_library_chunks_in_context
+                if focus_sources and include_library
+                else 0
+            ),
+        )
         citations = citations_from_chunks(selected)
         answer = generate_answer(question, context, history=history, citations=citations)
         sources = sorted({c["source"] for c in selected})
+
+        pack_warnings = list(pack_warnings)
+        section_hits = self._section_refs(question, explicit_sections)
+        if section_hits:
+            section_in_context = {
+                norm
+                for c in selected
+                for norm in [normalize_section_number(c.get("spec_section") or "")]
+                + extract_section_numbers(c.get("text") or "")
+                if norm
+            }
+            missing = [s for s in section_hits if s not in section_in_context]
+            if missing:
+                pack_warnings.append(
+                    "Section lookup requested "
+                    + ", ".join(missing)
+                    + " — re-upload spec PDFs to refresh section tags if results look incomplete."
+                )
+            else:
+                pack_warnings.append(
+                    "Retrieved specification section(s): " + ", ".join(section_hits) + "."
+                )
 
         if focus_sources:
             focused_hits = [c for c in selected if c["source"] in focus_sources]
