@@ -14,7 +14,12 @@ from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf
 from app.jobs import get_job, start_background_ingest
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
-from app.webauthn_auth import WebAuthnMiddleware, router as auth_router
+from app.webauthn_auth import (
+    WebAuthnMiddleware,
+    effective_role,
+    require_admin,
+    router as auth_router,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -131,12 +136,7 @@ def _require_keys() -> None:
 async def lifespan(_: FastAPI):
     if not settings.openai_api_key:
         print("Warning: OPENAI_API_KEY not set — get one at platform.openai.com.")
-    try:
-        changed = get_rag().reclassify_upload_origins()
-        if changed:
-            print(f"Reclassified {changed} document(s) between library and user uploads.")
-    except Exception as exc:
-        print(f"Warning: upload reclassification skipped: {exc}")
+    # Do not open Chroma on startup — reclassifying 600k+ chunks blocks deploy/OOMs.
     yield
 
 
@@ -179,11 +179,11 @@ def _embeddings_configured() -> bool:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    rag = get_rag()
+    # Do not open Chroma here — large indexes can OOM or stall Railway deploy checks.
     return HealthResponse(
         status="ok",
         version=app.version,
-        documents_indexed=rag.document_count,
+        documents_indexed=0,
         data_dir=str(settings.data_path),
         llm=settings.openai_model,
         embeddings=f"{settings.embedding_provider}:{settings.openai_embedding_model if settings.embedding_provider == 'openai' else settings.voyage_embedding_model}",
@@ -242,9 +242,38 @@ def download_file(request: Request, filename: str) -> FileResponse:
     )
 
 
+@app.delete("/files/{filename}")
+def delete_file(request: Request, filename: str) -> dict[str, str | int]:
+    require_api_key(request)
+    role = effective_role(request)
+
+    safe = Path(filename).name
+    if not safe or safe != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    rag = get_rag()
+    doc = next((d for d in rag.list_documents() if d.get("source") == safe), None)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    origin = (doc.get("upload_origin") or "").lower()
+    if origin != "user":
+        raise HTTPException(status_code=403, detail="Only user uploads can be deleted from the app.")
+    if role != "admin" and role != "user":
+        raise HTTPException(status_code=403, detail="Not authorized to delete files.")
+
+    chunks = rag.delete_source(safe)
+    path = resolve_data_file(safe)
+    if path and path.is_file():
+        path.unlink()
+
+    return {"message": f"Deleted {safe}.", "chunks_removed": chunks}
+
+
 @app.post("/sync/publications", response_model=PublicationSyncResponse)
 def sync_publications(request: Request, force: bool = False) -> PublicationSyncResponse:
     require_api_key(request)
+    require_admin(request)
     result = check_publication_sites(force=force)
     return PublicationSyncResponse(**result)
 
@@ -345,6 +374,7 @@ def query(request: Request, body: QueryRequest) -> QueryResponse:
 @app.post("/ingest", response_model=IngestResponse)
 def ingest(request: Request) -> IngestResponse:
     require_api_key(request)
+    require_admin(request)
     _require_keys()
     result = ingest_directory()
     return IngestResponse(
@@ -358,6 +388,7 @@ def ingest(request: Request) -> IngestResponse:
 @app.post("/reset")
 def reset_index(request: Request) -> dict[str, str]:
     require_api_key(request)
+    require_admin(request)
     if not settings.allow_index_reset:
         raise HTTPException(
             status_code=403,
