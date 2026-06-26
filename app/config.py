@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     openai_max_tokens: int = 4096
     openai_embedding_model: str = "text-embedding-3-small"
     embedding_provider: str = "openai"
+    embedding_batch_size: int = 128
 
     # Optional: Voyage embeddings only (if you switch EMBEDDING_PROVIDER=voyage)
     voyage_api_key: str = ""
