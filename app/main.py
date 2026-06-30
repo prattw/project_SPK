@@ -14,12 +14,6 @@ from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf
 from app.jobs import get_job, start_background_ingest
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
-from app.webauthn_auth import (
-    WebAuthnMiddleware,
-    effective_role,
-    require_admin,
-    router as auth_router,
-)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -157,9 +151,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(ApiKeyMiddleware)
-app.add_middleware(WebAuthnMiddleware)
-
-app.include_router(auth_router)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -189,7 +180,7 @@ def health() -> HealthResponse:
         data_dir=str(settings.data_path),
         llm=settings.openai_model,
         embeddings=f"{settings.embedding_provider}:{settings.openai_embedding_model if settings.embedding_provider == 'openai' else settings.voyage_embedding_model}",
-        auth_required=bool(settings.app_api_key) or settings.webauthn_enabled,
+        auth_required=bool(settings.app_api_key),
         llm_configured=bool(settings.openai_api_key),
         embeddings_configured=_embeddings_configured(),
         context_limits=ContextLimits(
@@ -247,7 +238,6 @@ def download_file(request: Request, filename: str) -> FileResponse:
 @app.delete("/files/{filename}")
 def delete_file(request: Request, filename: str) -> dict[str, str | int]:
     require_api_key(request)
-    role = effective_role(request)
 
     safe = Path(filename).name
     if not safe or safe != filename:
@@ -261,8 +251,6 @@ def delete_file(request: Request, filename: str) -> dict[str, str | int]:
     origin = (doc.get("upload_origin") or "").lower()
     if origin != "user":
         raise HTTPException(status_code=403, detail="Only user uploads can be deleted from the app.")
-    if role != "admin" and role != "user":
-        raise HTTPException(status_code=403, detail="Not authorized to delete files.")
 
     chunks = rag.delete_source(safe)
     path = resolve_data_file(safe)
@@ -275,7 +263,6 @@ def delete_file(request: Request, filename: str) -> dict[str, str | int]:
 @app.post("/sync/publications", response_model=PublicationSyncResponse)
 def sync_publications(request: Request, force: bool = False) -> PublicationSyncResponse:
     require_api_key(request)
-    require_admin(request)
     result = check_publication_sites(force=force)
     return PublicationSyncResponse(**result)
 
@@ -378,7 +365,6 @@ def query(request: Request, body: QueryRequest) -> QueryResponse:
 @app.post("/ingest", response_model=IngestResponse)
 def ingest(request: Request) -> IngestResponse:
     require_api_key(request)
-    require_admin(request)
     _require_keys()
     result = ingest_directory()
     return IngestResponse(
@@ -392,7 +378,6 @@ def ingest(request: Request) -> IngestResponse:
 @app.post("/reset")
 def reset_index(request: Request) -> dict[str, str]:
     require_api_key(request)
-    require_admin(request)
     if not settings.allow_index_reset:
         raise HTTPException(
             status_code=403,

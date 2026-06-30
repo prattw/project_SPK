@@ -15,6 +15,7 @@ from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
 from app.doc_metadata import classify_upload_origin, enrich_library_fields
 from app.embeddings import embed_query, embed_texts
+from app.llm import generate_answer, generate_general_answer
 from app.regulatory_retrieval import library_subqueries, question_needs_library_regulations
 from app.section_search import (
     detect_page_section,

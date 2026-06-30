@@ -13,12 +13,6 @@ const noticeBar = document.getElementById("noticeBar");
 const activeJobsEl = document.getElementById("activeJobs");
 const uploadStatusEl = document.getElementById("uploadStatus");
 const limitsListEl = document.getElementById("limitsList");
-const loginBtn = document.getElementById("loginBtn");
-const enrollBtn = document.getElementById("enrollBtn");
-const enrollLabel = document.getElementById("enrollLabel");
-const enrollCode = document.getElementById("enrollCode");
-const enrollCodeToggle = document.getElementById("enrollCodeToggle");
-const authError = document.getElementById("authError");
 const configStatus = document.getElementById("configStatus");
 const versionBadge = document.getElementById("versionBadge");
 const sessionListEl = document.getElementById("sessionList");
@@ -34,181 +28,20 @@ const viewChat = document.getElementById("view-chat");
 const dropOverlay = document.getElementById("dropOverlay");
 const aboutModal = document.getElementById("aboutModal");
 const helpModal = document.getElementById("helpModal");
+const loginScreen = document.getElementById("loginScreen");
+const loginForm = document.getElementById("loginForm");
+const loginEmail = document.getElementById("loginEmail");
+const loginSubmit = document.getElementById("loginSubmit");
+const loginError = document.getElementById("loginError");
 
-let authRequired = false;
 let userRole = "admin";
-let authLabel = "";
 let isQuerying = false;
 let activeUploads = 0;
 
-/* ---------- Authenticated fetch (cookie session) ---------- */
+/* ---------- Fetch helper ---------- */
 
 async function apiFetch(url, options = {}) {
-  const res = await fetch(url, { credentials: "same-origin", ...options });
-  if (res.status === 401) {
-    showAuthGate();
-    throw new Error("Authentication required.");
-  }
-  return res;
-}
-
-function showAuthGate() {
-  authGate.hidden = false;
-}
-
-function hideAuthGate() {
-  authGate.hidden = true;
-}
-
-/* ---------- WebAuthn / YubiKey ---------- */
-
-function b64urlToBytes(value) {
-  const pad = "=".repeat((4 - (value.length % 4)) % 4);
-  const base64 = (value + pad).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(base64);
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  return bytes.buffer;
-}
-
-function bytesToB64url(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let str = "";
-  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
-  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function showAuthError(msg) {
-  authError.textContent = msg;
-  authError.hidden = false;
-}
-
-function clearAuthError() {
-  authError.hidden = true;
-  authError.textContent = "";
-}
-
-async function webauthnLogin() {
-  clearAuthError();
-  if (!window.PublicKeyCredential) {
-    showAuthError("This browser does not support security keys (WebAuthn).");
-    return;
-  }
-  try {
-    const beginRes = await fetch("/auth/login/begin", {
-      method: "POST",
-      credentials: "same-origin",
-    });
-    if (!beginRes.ok) {
-      const detail = (await beginRes.json()).detail || "Could not start sign-in.";
-      if (beginRes.status === 403 && /no security keys/i.test(detail)) {
-        showAuthError("No key enrolled yet. Expand “First time? Enroll your key” below.");
-      } else {
-        showAuthError(detail);
-      }
-      return;
-    }
-    const options = await beginRes.json();
-    options.challenge = b64urlToBytes(options.challenge);
-    (options.allowCredentials || []).forEach((c) => (c.id = b64urlToBytes(c.id)));
-
-    const assertion = await navigator.credentials.get({ publicKey: options });
-    const payload = {
-      id: assertion.id,
-      rawId: bytesToB64url(assertion.rawId),
-      type: assertion.type,
-      response: {
-        authenticatorData: bytesToB64url(assertion.response.authenticatorData),
-        clientDataJSON: bytesToB64url(assertion.response.clientDataJSON),
-        signature: bytesToB64url(assertion.response.signature),
-        userHandle: assertion.response.userHandle
-          ? bytesToB64url(assertion.response.userHandle)
-          : null,
-      },
-    };
-    const res = await fetch("/auth/login/complete", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      showAuthError((await res.json()).detail || "Sign-in failed.");
-      return;
-    }
-    hideAuthGate();
-    await initApp();
-  } catch (err) {
-    const msg = err.message || String(err);
-    if (msg === "Load failed" || msg === "Failed to fetch") {
-      showAuthError("Could not reach the server. Check that ./start.sh is still running, then try again.");
-    } else if (err.name === "NotAllowedError") {
-      showAuthError("Sign-in was cancelled or timed out. Tap your YubiKey when it blinks.");
-    } else {
-      showAuthError(msg);
-    }
-  }
-}
-
-async function webauthnEnroll() {
-  clearAuthError();
-  if (!window.PublicKeyCredential) {
-    showAuthError("This browser does not support security keys (WebAuthn).");
-    return;
-  }
-  const code = enrollCode.value.trim();
-  if (!code) {
-    showAuthError("Enter the enrollment code from your administrator.");
-    return;
-  }
-  try {
-    const beginRes = await fetch("/auth/register/begin", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label: enrollLabel.value.trim(), enroll_code: code }),
-    });
-    if (!beginRes.ok) {
-      showAuthError((await beginRes.json()).detail || "Could not start enrollment.");
-      return;
-    }
-    const options = await beginRes.json();
-    options.challenge = b64urlToBytes(options.challenge);
-    options.user.id = b64urlToBytes(options.user.id);
-    (options.excludeCredentials || []).forEach((c) => (c.id = b64urlToBytes(c.id)));
-
-    const cred = await navigator.credentials.create({ publicKey: options });
-    const payload = {
-      id: cred.id,
-      rawId: bytesToB64url(cred.rawId),
-      type: cred.type,
-      response: {
-        attestationObject: bytesToB64url(cred.response.attestationObject),
-        clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
-      },
-    };
-    const res = await fetch("/auth/register/complete", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      showAuthError((await res.json()).detail || "Enrollment failed.");
-      return;
-    }
-    hideAuthGate();
-    await initApp();
-  } catch (err) {
-    const msg = err.message || String(err);
-    if (msg === "Load failed" || msg === "Failed to fetch") {
-      showAuthError("Could not reach the server. Check that ./start.sh is still running, then try again.");
-    } else if (err.name === "NotAllowedError") {
-      showAuthError("Enrollment was cancelled or timed out. Tap your YubiKey when it blinks.");
-    } else {
-      showAuthError(msg);
-    }
-  }
+  return fetch(url, { credentials: "same-origin", ...options });
 }
 
 /* ---------- Session history (stored in this browser) ---------- */
@@ -900,11 +733,6 @@ function uploadOne(file, sessionId, onProgress) {
       }
     });
     xhr.addEventListener("load", () => {
-      if (xhr.status === 401) {
-        showAuthGate();
-        reject(new Error("Authentication required — sign in with your security key."));
-        return;
-      }
       let data;
       try {
         data = JSON.parse(xhr.responseText);
@@ -980,6 +808,8 @@ async function handleFiles(files) {
   // send button re-enables as soon as the last upload settles. We intentionally
   // do NOT touch isQuerying here (that flag is only for in-flight queries).
   await uploadFiles(files);
+  // Reflect the newly shared upload(s) in the User Uploads tab immediately.
+  refreshUploads();
 }
 
 async function handleFileInput(input) {
@@ -1054,9 +884,10 @@ async function askQuestion(question) {
   setLoading(true);
   hideNotice();
 
+  // Every query searches the entire shared corpus — the full Document Library
+  // plus all user-uploaded files (from any user/session). No per-session focus
+  // filtering, so previously uploaded specs/submittals are always in scope.
   const payload = { question, include_library: true };
-  const focus = sessionFocusSources();
-  if (focus?.length) payload.focus_sources = focus;
   const history = sessionHistory();
   if (history?.length) payload.history = history.slice(0, -1);
 
@@ -1248,18 +1079,6 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-/* ---------- Auth gate ---------- */
-
-loginBtn.addEventListener("click", webauthnLogin);
-enrollBtn.addEventListener("click", webauthnEnroll);
-
-enrollCodeToggle.addEventListener("click", () => {
-  const show = enrollCode.type === "password";
-  enrollCode.type = show ? "text" : "password";
-  enrollCodeToggle.textContent = show ? "Hide" : "Show";
-  enrollCodeToggle.setAttribute("aria-label", show ? "Hide enrollment code" : "Show enrollment code");
-});
-
 /* ---------- Init ---------- */
 
 async function initApp() {
@@ -1271,46 +1090,47 @@ async function initApp() {
 async function bootstrap() {
   renderSessionList();
   renderPromptCards();
-  try {
-    const res = await fetch("/auth/status", { credentials: "same-origin" });
-    const status = await res.json();
-    if (status.enabled && !status.authenticated) {
-      showAuthGate();
-      userRole = "user";
-      const enrollDetails = document.querySelector(".auth-enroll");
-      if (enrollDetails && !status.enrollment_open) {
-        enrollDetails.hidden = true;
-      } else if (enrollDetails) {
-        enrollDetails.hidden = false;
-        const hint = document.getElementById("enrollHint");
-        if (hint && status.allowed_labels?.length) {
-          hint.textContent =
-            "Enter the enrollment code and use the exact key name: " +
-            status.allowed_labels.join(" or ") +
-            ". (WebAuthn identifies keys by name, not serial number.)";
-        }
-      }
-      const host = location.hostname;
-      if (host === "localhost" || host === "127.0.0.1") {
-        const hint = document.getElementById("enrollHint");
-        if (hint) {
-          hint.innerHTML =
-            'Local enrollment code: <code>spk-local-enroll</code>. ' +
-            'Insert your YubiKey before enrolling. If Mac offers Touch ID, choose <strong>More Options → Security Key</strong>.';
-        }
-      }
-      // Still load public limits/version so the badge is populated.
-      await loadLimits();
-      return;
-    }
-    if (status.role) {
-      userRole = status.role;
-      authLabel = status.label || "";
-    }
-  } catch {
-    /* if status check fails, fall through and try to load the app */
-  }
   await initApp();
 }
 
-bootstrap();
+/* ---------- Email login gate ---------- */
+const USER_EMAIL_KEY = "spk_user_email";
+
+// A valid sign-in requires a well-formed address on the @usace.army.mil domain.
+function isValidUsaceEmail(value) {
+  return /^[^\s@]+@usace\.army\.mil$/i.test((value || "").trim());
+}
+
+function updateLoginButton() {
+  const ok = isValidUsaceEmail(loginEmail.value);
+  loginSubmit.disabled = !ok;
+  if (ok && !loginError.hidden) loginError.hidden = true;
+}
+
+function enterApp() {
+  loginScreen.hidden = true;
+  bootstrap();
+}
+
+loginEmail.addEventListener("input", updateLoginButton);
+loginForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const email = loginEmail.value.trim();
+  if (!isValidUsaceEmail(email)) {
+    loginError.hidden = false;
+    loginEmail.focus();
+    return;
+  }
+  localStorage.setItem(USER_EMAIL_KEY, email.toLowerCase());
+  enterApp();
+});
+
+// First screen: show the login gate unless a valid USACE email is already stored.
+const savedUserEmail = localStorage.getItem(USER_EMAIL_KEY);
+if (savedUserEmail && isValidUsaceEmail(savedUserEmail)) {
+  enterApp();
+} else {
+  loginScreen.hidden = false;
+  updateLoginButton();
+  loginEmail.focus();
+}

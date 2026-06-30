@@ -4,9 +4,31 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.8.3" />
+  <link rel="stylesheet" href="/static/style.css?v=0.8.6" />
 </head>
 <body>
+  <!-- Email login gate (first screen) -->
+  <div id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <img class="login-logo" src="/static/img/usace-sac-logo.png" alt="US Army Corps of Engineers, Sacramento District" />
+      <form id="loginForm" class="login-form" novalidate>
+        <label class="login-label" for="loginEmail">Sign in with your USACE email</label>
+        <input
+          type="email"
+          id="loginEmail"
+          class="login-input"
+          placeholder="name@usace.army.mil"
+          autocomplete="email"
+          autocapitalize="off"
+          spellcheck="false"
+          required
+        />
+        <button type="submit" id="loginSubmit" class="login-btn" disabled>LOGIN</button>
+        <p id="loginError" class="login-error" hidden>Enter a valid @usace.army.mil email address.</p>
+      </form>
+    </div>
+  </div>
+
   <!-- Top header bar -->
   <header class="topbar">
     <div class="brand">
@@ -1219,29 +1241,6 @@
     </main>
   </div>
 
-  <!-- Security key (YubiKey) gate -->
-  <div id="authGate" class="overlay" hidden>
-    <div class="modal auth-modal">
-      <img class="auth-logo" src="/static/img/sac-district-seal.png" alt="USACE Sacramento District seal" />
-      <h2>Security key required</h2>
-      <p>This application is restricted to authorized users. Insert your security key (YubiKey) and tap it to sign in.</p>
-
-      <button type="button" id="loginBtn" class="primary auth-primary">Sign in with security key</button>
-      <p id="authError" class="auth-error" hidden></p>
-
-      <details class="auth-enroll">
-        <summary>First time? Enroll your key</summary>
-        <p class="hint" id="enrollHint">Enter the enrollment code provided by your administrator, then tap your key to register it.</p>
-        <input type="text" id="enrollLabel" placeholder="Key name: Admin or User_1" autocomplete="off" />
-        <div class="password-wrap">
-          <input type="password" id="enrollCode" placeholder="Enrollment code" autocomplete="off" />
-          <button type="button" id="enrollCodeToggle" class="password-toggle" aria-label="Show enrollment code">Show</button>
-        </div>
-        <button type="button" id="enrollBtn" class="primary">Enroll this key</button>
-      </details>
-    </div>
-  </div>
-
   <!-- About modal -->
   <div id="aboutModal" class="overlay" hidden>
     <div class="modal">
@@ -1286,6 +1285,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.8.3"></script>
+  <script src="/static/app.js?v=0.8.6"></script>
 </body>
 </html>
