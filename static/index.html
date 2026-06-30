@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.6.1" />
+  <link rel="stylesheet" href="/static/style.css?v=0.8.3" />
 </head>
 <body>
   <!-- Top header bar -->
@@ -76,14 +76,7 @@
               Criteria (UFC), Unified Facilities Guide Specifications (UFGS), as well
               as Army Regulations (AR) and Army Pamphlets (PAM)
             </p>
-            <div class="prompt-grid" id="promptGrid">
-              <button type="button" class="prompt-card">What are the USACE policy and publication types, purposes, and hierarchy? Please provide a list in the PAL library with a count of each and total, and sort by most to least.</button>
-              <button type="button" class="prompt-card">What USACE publications pertain to Cost Engineering?</button>
-              <button type="button" class="prompt-card">Do Civil Works projects require the use of UFC criteria and UFGS guide specifications?</button>
-              <button type="button" class="prompt-card">What are the key differences between cost engineering requirements for Civil Works versus Military Programs?</button>
-              <button type="button" class="prompt-card">What are the policies pertaining to SCIFs?</button>
-              <button type="button" class="prompt-card">What are the document naming and numbering standards for USACE regulations and policies? List all document series codes and provide examples.</button>
-            </div>
+            <div class="prompt-grid" id="promptGrid"></div>
           </div>
 
           <div id="messages" class="messages"></div>
@@ -101,11 +94,8 @@
               <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
             </button>
           </div>
-          <p class="composer-hint">Upload or drag-and-drop files into the chat. Large PDFs index in the background &mdash; see Help for details.</p>
-          <label class="composer-option">
-            <input type="checkbox" id="includeLibrary" checked />
-            Include Document Library (UFC, ER, EM, US Code, FAR) alongside session uploads
-          </label>
+          <div id="uploadStatus" class="upload-status" hidden></div>
+          <p class="composer-hint">Upload or drag-and-drop files into the chat. The full Document Library is always searched alongside your uploads. Large PDFs index in the background &mdash; see Help for details.</p>
         </form>
       </section>
 
@@ -1296,6 +1286,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.7.8"></script>
+  <script src="/static/app.js?v=0.8.3"></script>
 </body>
 </html>

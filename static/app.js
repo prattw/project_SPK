@@ -11,8 +11,8 @@ const questionEl = document.getElementById("question");
 const sendBtn = document.getElementById("sendBtn");
 const noticeBar = document.getElementById("noticeBar");
 const activeJobsEl = document.getElementById("activeJobs");
+const uploadStatusEl = document.getElementById("uploadStatus");
 const limitsListEl = document.getElementById("limitsList");
-const includeLibraryEl = document.getElementById("includeLibrary");
 const loginBtn = document.getElementById("loginBtn");
 const enrollBtn = document.getElementById("enrollBtn");
 const enrollLabel = document.getElementById("enrollLabel");
@@ -38,6 +38,8 @@ const helpModal = document.getElementById("helpModal");
 let authRequired = false;
 let userRole = "admin";
 let authLabel = "";
+let isQuerying = false;
+let activeUploads = 0;
 
 /* ---------- Authenticated fetch (cookie session) ---------- */
 
@@ -286,6 +288,7 @@ function newConversation() {
   messagesEl.innerHTML = "";
   welcomeEl.hidden = false;
   hideNotice();
+  clearUploadChips();
   renderSessionList();
   syncPublications();
 }
@@ -295,6 +298,7 @@ function openSession(id) {
   if (!s) return;
   currentSessionId = id;
   messagesEl.innerHTML = "";
+  clearUploadChips();
   welcomeEl.hidden = s.messages.length > 0;
   s.messages.forEach((m) => renderMessage(m.role, m.text, m.sources || [], m.citations || []));
   showView("chat");
@@ -464,6 +468,17 @@ function renderMarkdown(text) {
 function renderMessage(role, text, sources = [], citations = []) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
+  if (role === "file") {
+    // text holds the filename; render an attachment chip in the thread.
+    div.innerHTML =
+      '<span class="file-chip">' +
+      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">' +
+      '<path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm0 1.5L18.5 8H14V3.5z"/></svg>' +
+      `<span class="file-chip-name">${escapeHtml(text)}</span></span>`;
+    messagesEl.appendChild(div);
+    chatScroll.scrollTop = chatScroll.scrollHeight;
+    return;
+  }
   if (role === "assistant") {
     const md = document.createElement("div");
     md.className = "md";
@@ -511,6 +526,20 @@ function addMessage(role, text, sources = [], citations = []) {
   renderSessionList();
 }
 
+function addFileMessage(filename) {
+  welcomeEl.hidden = true;
+  renderMessage("file", filename);
+  const s = ensureSession();
+  // Avoid duplicate file bubbles if the same file settles twice.
+  const already = s.messages.some((m) => m.role === "file" && m.text === filename);
+  if (!already) {
+    s.messages.push({ role: "file", text: filename });
+    s.updated = Date.now();
+    saveSessions();
+    renderSessionList();
+  }
+}
+
 function showNotice(text, type = "info") {
   noticeBar.hidden = false;
   noticeBar.className = `notice-bar ${type}`;
@@ -528,10 +557,72 @@ function showWarnings(warnings, context = "Upload") {
   addMessage("notice", `${context}: ${text}`);
 }
 
+function refreshSendButton() {
+  // Send + file pickers are disabled while a query is in flight or any file
+  // is still uploading/indexing. Driven only by isQuerying + activeUploads so
+  // the button reliably re-enables the moment uploads finish.
+  const busy = isQuerying || activeUploads > 0;
+  sendBtn.disabled = busy;
+  if (fileInput) fileInput.disabled = busy;
+  if (fileInputDocs) fileInputDocs.disabled = busy;
+}
+
 function setLoading(on) {
-  sendBtn.disabled = on;
-  fileInput.disabled = on;
-  fileInputDocs.disabled = on;
+  isQuerying = on;
+  refreshSendButton();
+}
+
+/* ---------- In-composer upload status chips ---------- */
+
+function clearUploadChips() {
+  uploadStatusEl.innerHTML = "";
+  uploadStatusEl.hidden = true;
+}
+
+function addUploadChip(filename) {
+  uploadStatusEl.hidden = false;
+  const chip = document.createElement("div");
+  chip.className = "upload-chip is-indeterminate";
+  chip.innerHTML = `
+    <div class="upload-chip-head">
+      <span class="upload-chip-name">${escapeHtml(filename)}</span>
+      <span class="upload-chip-check" aria-label="Upload complete" title="Upload complete">&#10003;</span>
+    </div>
+    <div class="upload-chip-bar"><div class="upload-chip-fill"></div></div>
+    <div class="upload-chip-status">Preparing…</div>
+  `;
+  uploadStatusEl.appendChild(chip);
+  return chip;
+}
+
+function setUploadProgress(chip, pct, label) {
+  if (!chip) return;
+  const fill = chip.querySelector(".upload-chip-fill");
+  const status = chip.querySelector(".upload-chip-status");
+  if (typeof pct === "number" && pct >= 0) {
+    chip.classList.remove("is-indeterminate");
+    fill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  } else {
+    // Unknown progress — show an animated indeterminate bar.
+    chip.classList.add("is-indeterminate");
+  }
+  if (label) status.textContent = label;
+}
+
+function markUploadDone(chip, label = "Ready") {
+  if (!chip) return;
+  chip.classList.remove("is-indeterminate", "is-error");
+  chip.classList.add("is-done");
+  chip.querySelector(".upload-chip-fill").style.width = "100%";
+  chip.querySelector(".upload-chip-status").textContent = label;
+}
+
+function markUploadError(chip, message) {
+  if (!chip) return;
+  chip.classList.remove("is-indeterminate", "is-done");
+  chip.classList.add("is-error");
+  chip.querySelector(".upload-chip-fill").style.width = "100%";
+  chip.querySelector(".upload-chip-status").textContent = message || "Upload failed.";
 }
 
 /* ---------- Server status / limits ---------- */
@@ -741,43 +832,44 @@ function hideActiveJob() {
   activeJobsEl.innerHTML = "";
 }
 
-async function pollJob(jobId, filename, pagesTotal) {
+async function pollJob(jobId, filename, pagesTotal, onProgress) {
   const interval = 3000;
-  showNotice(
-    `Indexing ${filename} (${pagesTotal.toLocaleString()} pages). Large PDFs may take 10–30+ minutes. Wait until indexing completes before relying on answers.`,
-    "info"
-  );
-  showActiveJob(filename, 0, pagesTotal);
 
   for (;;) {
-    const res = await apiFetch(`/jobs/${jobId}`);
-    const job = await res.json();
+    let res;
+    let job;
+    try {
+      res = await apiFetch(`/jobs/${jobId}`);
+      job = await res.json();
+    } catch (err) {
+      return { ok: false, message: err.message || "Could not check indexing status." };
+    }
     if (!res.ok) {
-      hideActiveJob();
-      hideNotice();
-      addMessage("error", job.detail || "Could not check indexing status.");
-      return;
+      return { ok: false, message: job.detail || "Could not check indexing status." };
     }
     if (job.status === "running" || job.status === "queued") {
-      showActiveJob(filename, job.pages_done, job.pages_total);
+      const total = job.pages_total || pagesTotal || 0;
+      const done = job.pages_done || 0;
+      const pct = total ? Math.round((done / total) * 100) : -1;
+      if (onProgress) {
+        onProgress(
+          pct,
+          total
+            ? `Indexing ${done.toLocaleString()} / ${total.toLocaleString()} pages (${pct}%)`
+            : "Indexing on server…"
+        );
+      }
       await new Promise((r) => setTimeout(r, interval));
       continue;
     }
-    hideActiveJob();
     if (job.status === "done") {
-      hideNotice();
-      addMessage(
-        "assistant",
-        `${filename} is ready — ${job.chunks_indexed.toLocaleString()} searchable sections from ${job.pages_done.toLocaleString()} pages.`
-      );
       showWarnings(job.warnings, "Indexing");
-      await refreshUploads();
-      return;
+      return {
+        ok: true,
+        message: `Ready — ${job.chunks_indexed.toLocaleString()} sections from ${job.pages_done.toLocaleString()} pages`,
+      };
     }
-    hideNotice();
-    addMessage("error", job.message || `${filename}: indexing failed.`);
-    showNotice(job.message || "Indexing failed.", "error");
-    return;
+    return { ok: false, message: job.message || `${filename}: indexing failed.` };
   }
 }
 
@@ -796,32 +888,86 @@ async function readJsonResponse(res) {
   }
 }
 
+function uploadOne(file, sessionId, onProgress) {
+  // XHR (not fetch) so we can report real upload transfer progress.
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/upload");
+    xhr.withCredentials = true;
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status === 401) {
+        showAuthGate();
+        reject(new Error("Authentication required — sign in with your security key."));
+        return;
+      }
+      let data;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        reject(new Error(`Server returned an unexpected response (HTTP ${xhr.status}).`));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.detail || "Upload failed."));
+    });
+    xhr.addEventListener("error", () => reject(new Error("Network error during upload.")));
+    const form = new FormData();
+    form.append("file", file);
+    form.append("session_id", sessionId);
+    xhr.send(form);
+  });
+}
+
 async function uploadFiles(files) {
   const session = ensureSession();
   for (const file of files) {
-    addMessage("assistant", `Uploading ${file.name}…`);
-    const form = new FormData();
-    form.append("file", file);
-    form.append("session_id", session.id);
+    const chip = addUploadChip(file.name);
+    activeUploads++;
+    refreshSendButton();
     try {
-      const res = await apiFetch("/upload", { method: "POST", body: form });
-      const data = await readJsonResponse(res);
-      if (!res.ok) {
-        addMessage("error", data.detail || "Upload failed");
-        showNotice(data.detail || "Upload failed", "error");
-        continue;
-      }
+      setUploadProgress(chip, 0, "Uploading… 0%");
+      const data = await uploadOne(file, session.id, (pct) => {
+        setUploadProgress(
+          chip,
+          pct,
+          pct >= 100 ? "Processing on server…" : `Uploading… ${pct}%`
+        );
+      });
+
       if (data.status === "processing" && data.job_id) {
-        addMessage("assistant", data.message);
-        await pollJob(data.job_id, data.filename, data.pages_total || 0);
+        setUploadProgress(chip, -1, "Indexing on server…");
+        const result = await pollJob(
+          data.job_id,
+          data.filename,
+          data.pages_total || 0,
+          (pct, label) => setUploadProgress(chip, pct, label)
+        );
+        if (result.ok) {
+          trackSessionDocument(data.filename);
+          addFileMessage(data.filename);
+          markUploadDone(chip, result.message);
+        } else {
+          markUploadError(chip, result.message);
+        }
+      } else {
         trackSessionDocument(data.filename);
-        continue;
+        addFileMessage(data.filename);
+        showWarnings(data.warnings, "Indexing");
+        const sections = data.chunks_indexed
+          ? `Ready — ${Number(data.chunks_indexed).toLocaleString()} sections`
+          : "Ready";
+        markUploadDone(chip, sections);
       }
-      trackSessionDocument(data.filename);
-      addMessage("assistant", `${data.filename} indexed (${data.chunks_indexed} chunks).`);
-      showWarnings(data.warnings, "Indexing");
     } catch (err) {
-      addMessage("error", err.message);
+      markUploadError(chip, err.message);
+    } finally {
+      activeUploads = Math.max(0, activeUploads - 1);
+      refreshSendButton();
     }
   }
   await refreshUploads();
@@ -830,12 +976,10 @@ async function uploadFiles(files) {
 async function handleFiles(files) {
   if (!files || !files.length) return;
   showView("chat");
-  setLoading(true);
-  try {
-    await uploadFiles(files);
-  } finally {
-    setLoading(false);
-  }
+  // uploadFiles manages activeUploads + refreshSendButton per file, so the
+  // send button re-enables as soon as the last upload settles. We intentionally
+  // do NOT touch isQuerying here (that flag is only for in-flight queries).
+  await uploadFiles(files);
 }
 
 async function handleFileInput(input) {
@@ -910,7 +1054,7 @@ async function askQuestion(question) {
   setLoading(true);
   hideNotice();
 
-  const payload = { question, include_library: includeLibraryEl?.checked !== false };
+  const payload = { question, include_library: true };
   const focus = sessionFocusSources();
   if (focus?.length) payload.focus_sources = focus;
   const history = sessionHistory();
@@ -938,6 +1082,7 @@ async function askQuestion(question) {
 
 chatForm.addEventListener("submit", (e) => {
   e.preventDefault();
+  if (activeUploads > 0 || isQuerying) return; // block while files upload/index
   const question = questionEl.value.trim();
   if (!question) return;
   questionEl.value = "";
@@ -956,6 +1101,106 @@ questionEl.addEventListener("input", () => {
   questionEl.style.height = "auto";
   questionEl.style.height = Math.min(questionEl.scrollHeight, 140) + "px";
 });
+
+// Starter questions are generated from topics x phrasings so the six cards
+// vary in novel ways on (almost) every visit. ~40 topics x 8 templates gives
+// hundreds of distinct questions, so the exact same set of six recurring is
+// statistically rare.
+const QUESTION_TOPICS = [
+  "value engineering on USACE projects",
+  "cost engineering and estimating",
+  "submittal review and approval procedures",
+  "design quality control plans",
+  "construction quality management",
+  "antiterrorism and force protection for buildings",
+  "dam safety and risk management",
+  "levee and floodwall design",
+  "geotechnical engineering for water resources projects",
+  "environmental compliance and NEPA",
+  "sustainability and energy efficiency in facilities",
+  "fire protection and life safety",
+  "SCIF design and accreditation",
+  "BIM and CAD standards",
+  "document naming and numbering",
+  "contract modifications and change orders",
+  "real estate acquisition",
+  "hydraulic and hydrologic design",
+  "structural design criteria",
+  "concrete materials and testing",
+  "commissioning of building systems",
+  "warranty requirements for construction",
+  "project risk management",
+  "occupational safety and health under EM 385-1-1",
+  "use of Unified Facilities Criteria (UFC)",
+  "use of Unified Facilities Guide Specifications (UFGS)",
+  "engineering considerations during construction",
+  "inspection and acceptance testing",
+  "stormwater management and low-impact development",
+  "seismic design requirements",
+  "corrosion prevention and control",
+  "accessibility (ABA) compliance",
+  "interior design and signage standards",
+  "roofing and waterproofing systems",
+  "HVAC and mechanical systems design",
+  "electrical power and lighting design",
+  "military construction (MILCON) programming",
+  "operations and maintenance manuals",
+];
+
+const QUESTION_TEMPLATES = [
+  (t) => `What are the requirements for ${t}?`,
+  (t) => `Summarize USACE guidance on ${t}.`,
+  (t) => `Which USACE publications govern ${t}?`,
+  (t) => `What are the key policies and procedures for ${t}?`,
+  (t) => `Explain the roles and responsibilities for ${t}.`,
+  (t) => `What standards and criteria apply to ${t}?`,
+  (t) => `Give an overview of ${t} and the controlling regulations.`,
+  (t) => `What guidance covers ${t}?`,
+];
+
+// A few high-value "signature" questions that occasionally appear verbatim.
+const CURATED_QUESTIONS = [
+  "What are the USACE policy and publication types, purposes, and hierarchy? Provide a list in the PAL library with a count of each and the total, sorted most to least.",
+  "What are the document naming and numbering standards for USACE regulations and policies? List all document series codes with examples.",
+  "What are the key differences between cost engineering requirements for Civil Works versus Military Programs?",
+  "Do Civil Works projects require the use of UFC criteria and UFGS guide specifications?",
+];
+
+function shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function generateQuestions(count = 6) {
+  const topics = shuffleInPlace(QUESTION_TOPICS.slice());
+  const templates = shuffleInPlace(QUESTION_TEMPLATES.slice());
+  const out = [];
+  for (let i = 0; i < topics.length && out.length < count; i++) {
+    // Distinct topic each card; cycle templates so phrasings differ too.
+    out.push(templates[i % templates.length](topics[i]));
+  }
+  // ~50% of loads, swap one card for a curated signature question.
+  if (out.length && Math.random() < 0.5) {
+    const idx = Math.floor(Math.random() * out.length);
+    out[idx] = CURATED_QUESTIONS[Math.floor(Math.random() * CURATED_QUESTIONS.length)];
+  }
+  return shuffleInPlace(out).slice(0, count);
+}
+
+function renderPromptCards(count = 6) {
+  if (!promptGrid) return;
+  promptGrid.innerHTML = "";
+  for (const text of generateQuestions(count)) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "prompt-card";
+    btn.textContent = text;
+    promptGrid.appendChild(btn);
+  }
+}
 
 promptGrid.addEventListener("click", (e) => {
   const card = e.target.closest(".prompt-card");
@@ -1025,6 +1270,7 @@ async function initApp() {
 
 async function bootstrap() {
   renderSessionList();
+  renderPromptCards();
   try {
     const res = await fetch("/auth/status", { credentials: "same-origin" });
     const status = await res.json();
