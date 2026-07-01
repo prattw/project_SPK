@@ -14,9 +14,10 @@ from app.citations import citations_from_chunks
 from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
 from app.doc_metadata import classify_upload_origin, enrich_library_fields
+from app.usace_dates import normalize_doc_number
 from app.embeddings import embed_query, embed_texts
 from app.llm import generate_answer, generate_general_answer
-from app.regulatory_retrieval import library_subqueries, question_needs_library_regulations
+from app.regulatory_retrieval import expand_publication_refs, library_subqueries, question_needs_library_regulations
 from app.section_search import (
     detect_page_section,
     extract_section_numbers,
@@ -614,6 +615,78 @@ class RAGService:
 
         return found[:slots]
 
+    def _sources_for_doc_numbers(self, doc_numbers: list[str]) -> list[str]:
+        """Map publication numbers to indexed library source filenames."""
+        if not doc_numbers:
+            return []
+
+        sources: list[str] = []
+        seen: set[str] = set()
+        norm_targets = {normalize_doc_number(d): d for d in doc_numbers if d}
+
+        def add(source: str) -> None:
+            if source and source not in seen:
+                seen.add(source)
+                sources.append(source)
+
+        for doc in self.list_documents():
+            if (doc.get("upload_origin") or "").lower() != "library":
+                continue
+            src = doc.get("source") or ""
+            dn = normalize_doc_number(doc.get("doc_number"))
+            if dn in norm_targets:
+                add(src)
+                continue
+            src_slug = re.sub(r"[^A-Z0-9]", "", src.upper())
+            for target in norm_targets:
+                slug = re.sub(r"[^A-Z0-9]", "", target.upper())
+                if slug and slug in src_slug:
+                    add(src)
+                    break
+
+        return sources
+
+    def _chunks_by_doc_numbers(
+        self,
+        doc_numbers: list[str],
+        *,
+        slots: int = 16,
+    ) -> list[dict[str, Any]]:
+        """Fetch indexed chunks whose metadata doc_number matches a cited publication."""
+        if not doc_numbers or self.document_count == 0:
+            return []
+
+        found: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        per_doc = max(4, slots // max(len(doc_numbers), 1))
+
+        for doc_number in doc_numbers:
+            try:
+                result = self._collection.get(
+                    where={"doc_number": {"$eq": doc_number}},
+                    include=["documents", "metadatas"],
+                    limit=per_doc,
+                )
+            except Exception:
+                continue
+            self._append_get_results(result, found, seen, score=1.35)
+
+        if len(found) < slots:
+            for source in self._sources_for_doc_numbers(doc_numbers):
+                try:
+                    result = self._collection.get(
+                        where={"source": {"$eq": source}},
+                        include=["documents", "metadatas"],
+                        limit=per_doc,
+                    )
+                except Exception:
+                    continue
+                self._append_get_results(result, found, seen, score=1.3)
+                if len(found) >= slots:
+                    break
+
+        return found[:slots]
+
     def _expand_section_neighbors(
         self,
         section_chunks: list[dict[str, Any]],
@@ -684,16 +757,17 @@ class RAGService:
 
         focus = [s for s in (focus_sources or []) if s]
         focus_set = set(focus)
-        use_library = include_library and bool(focus)
+        library_slots = settings.library_retrieval_slots if include_library else 0
         k = min(
-            settings.max_retrieval_candidates_with_library if use_library else settings.max_retrieval_candidates,
+            settings.max_retrieval_candidates_with_library
+            if include_library
+            else settings.max_retrieval_candidates,
             self.document_count,
         )
         if top_k is not None:
             k = min(top_k, k)
 
-        library_slots = settings.library_retrieval_slots if use_library else 0
-        focus_k = max(k - library_slots, k // 3) if library_slots else k
+        focus_k = max(k - library_slots, k // 3) if library_slots and focus else k
 
         if focus and not include_library:
             semantic = self._semantic_search(
@@ -702,7 +776,7 @@ class RAGService:
                 where={"source": {"$in": focus}},
                 score_boost=0.15,
             )
-        elif focus:
+        elif focus and include_library:
             focused = self._semantic_search(
                 query,
                 focus_k,
@@ -711,8 +785,20 @@ class RAGService:
             )
             library_reg = self._retrieve_library_regulatory(query, focus_set, slots=library_slots)
             broad = self._semantic_search(query, k)
-            library_broad = [c for c in broad if c.get("source") not in focus_set][: max(4, library_slots // 3)]
+            library_broad = [c for c in broad if c.get("source") not in focus_set][
+                : max(4, library_slots // 3)
+            ]
             semantic = self._merge_chunks(focused, library_reg, library_broad, broad, limit=k)
+        elif include_library:
+            pub_refs = expand_publication_refs(query, self.list_documents())
+            pub_chunks = (
+                self._chunks_by_doc_numbers(pub_refs, slots=max(8, library_slots // 2))
+                if pub_refs
+                else []
+            )
+            library_reg = self._retrieve_library_regulatory(query, set(), slots=library_slots)
+            broad = self._semantic_search(query, k)
+            semantic = self._merge_chunks(pub_chunks, library_reg, broad, limit=k)
         else:
             semantic = self._semantic_search(query, k)
 
@@ -794,9 +880,7 @@ class RAGService:
             candidates,
             focus_sources=focus_sources,
             min_library_chunks=(
-                settings.min_library_chunks_in_context
-                if focus_sources and include_library
-                else 0
+                settings.min_library_chunks_in_context if include_library else 0
             ),
             max_focus_chunks_per_source=(
                 settings.max_focus_chunks_per_source if focus_sources else settings.max_chunks_per_source
@@ -807,14 +891,26 @@ class RAGService:
         sources = sorted({c["source"] for c in selected})
 
         pack_warnings = list(pack_warnings)
-        if focus_sources and include_library:
-            lib_in_selected = [c for c in selected if c.get("source") not in set(focus_sources)]
-            lib_names = sorted({c.get("source") for c in lib_in_selected})
+        pub_refs = expand_publication_refs(question, self.list_documents()) if include_library else []
+        if include_library:
+            lib_in_selected = [
+                c for c in selected if (c.get("upload_origin") or "").lower() == "library"
+            ]
+            lib_names = sorted({c.get("doc_number") or c.get("source") for c in lib_in_selected})
             if lib_names:
                 pack_warnings.append(
                     "Document Library sources in this answer: "
                     + ", ".join(lib_names[:8])
                     + ("…" if len(lib_names) > 8 else "")
+                )
+            elif pub_refs and not self._sources_for_doc_numbers(pub_refs):
+                pack_warnings.append(
+                    "This question references "
+                    + ", ".join(pub_refs[:6])
+                    + ("…" if len(pub_refs) > 6 else "")
+                    + ", but those publications are not indexed in the search database. "
+                    "The Document Library list in the UI is not the same as the vector index — "
+                    "ensure the library corpus is ingested into Chroma (production volume or /ingest)."
                 )
             elif question_needs_library_regulations(question):
                 pack_warnings.append(

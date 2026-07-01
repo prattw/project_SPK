@@ -77,6 +77,15 @@ def format_chunk_for_prompt(chunk: dict) -> str:
     return f"[{label}]\n{chunk['text']}"
 
 
+def _is_library_chunk(chunk: dict[str, Any], focus_set: set[str]) -> bool:
+    origin = (chunk.get("upload_origin") or "").lower()
+    if origin == "library":
+        return True
+    if origin == "user":
+        return False
+    return bool(focus_set) and chunk.get("source") not in focus_set
+
+
 def pack_chunks_for_llm(
     chunks: list[dict[str, Any]],
     *,
@@ -105,8 +114,8 @@ def pack_chunks_for_llm(
     )
 
     preselected: list[dict[str, Any]] = []
-    if min_library_chunks > 0 and focus_set:
-        library_ranked = [c for c in ranked if c.get("source") not in focus_set]
+    if min_library_chunks > 0:
+        library_ranked = [c for c in ranked if _is_library_chunk(c, focus_set)]
         preselected = library_ranked[:min_library_chunks]
 
     selected: list[dict[str, Any]] = list(preselected)
