@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     pdf_background_page_threshold: int = 75
     pdf_progress_every_pages: int = 25
     pdf_embed_flush_chunks: int = 250
+    # Pages whose embedded text is shorter than this are treated as scanned/image
+    # pages and sent through vision OCR (so scanned PDFs become searchable).
+    pdf_ocr_min_chars: int = 24
+    max_ocr_pages: int = 60  # cap OCR calls per document to bound time/cost
     allow_index_reset: bool = False  # set true only for local admin; never in production UI
 
     # Retrieval tuning for spec/submittal comparison sessions

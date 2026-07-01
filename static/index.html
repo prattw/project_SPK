@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.8.6" />
+  <link rel="stylesheet" href="/static/style.css?v=0.8.7" />
 </head>
 <body>
   <!-- Email login gate (first screen) -->
@@ -108,7 +108,7 @@
         <form id="chatForm" class="composer-wrap">
           <div class="composer">
             <label class="composer-add" title="Upload documents">
-              <input type="file" id="fileInput" multiple accept=".pdf,.docx,.xlsx,.xer,.xml,.ifc,.gltf,.glb,.txt,.md,.rvt,.dwg,.dxf,.nwd,.msg" hidden />
+              <input type="file" id="fileInput" multiple accept=".pdf,.docx,.xlsx,.csv,.pptx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tif,.tiff,.xer,.xml,.ifc,.gltf,.glb,.rvt,.dwg,.dxf,.nwd,.msg" hidden />
               +
             </label>
             <textarea id="question" rows="1" placeholder="Ask me anything about USACE policies and publications..." required></textarea>
@@ -117,7 +117,7 @@
             </button>
           </div>
           <div id="uploadStatus" class="upload-status" hidden></div>
-          <p class="composer-hint">Upload or drag-and-drop files into the chat. The full Document Library is always searched alongside your uploads. Large PDFs index in the background &mdash; see Help for details.</p>
+          <p class="composer-hint">Upload or drag-and-drop files into the chat &mdash; PDFs, Word, Excel, CSV, PowerPoint, text, and images (JPG/PNG, read with OCR). The full Document Library is always searched alongside your uploads. Large PDFs index in the background &mdash; see Help for details.</p>
         </form>
       </section>
 
@@ -1229,7 +1229,7 @@
           <div class="docs-head">
             <h2>User Uploaded Documents</h2>
             <label class="upload-btn">
-              <input type="file" id="fileInputDocs" multiple accept=".pdf,.docx,.xlsx,.xer,.xml,.ifc,.gltf,.glb,.txt,.md,.rvt,.dwg,.dxf,.nwd,.msg" hidden />
+              <input type="file" id="fileInputDocs" multiple accept=".pdf,.docx,.xlsx,.csv,.pptx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tif,.tiff,.xer,.xml,.ifc,.gltf,.glb,.rvt,.dwg,.dxf,.nwd,.msg" hidden />
               Upload files
             </label>
           </div>
@@ -1285,6 +1285,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.8.6"></script>
+  <script src="/static/app.js?v=0.8.7"></script>
 </body>
 </html>

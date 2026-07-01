@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -9,18 +10,32 @@ from pypdf import PdfReader
 
 from app.config import settings
 
+# Raster images — parsed for text + visual content via the vision model (OCR).
+IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".tif",
+    ".tiff",
+}
+
 SUPPORTED_EXTENSIONS = {
     ".txt",
     ".md",
     ".pdf",
     ".docx",
     ".xlsx",
+    ".csv",
+    ".pptx",
     ".xer",
     ".xml",
     ".ifc",
     ".gltf",
     ".glb",
-}
+} | IMAGE_EXTENSIONS
 
 BINARY_EXTENSIONS = {
     ".rvt",
@@ -32,9 +47,6 @@ BINARY_EXTENSIONS = {
     ".obj",
     ".3dm",
     ".msg",
-    ".jpg",
-    ".jpeg",
-    ".png",
 }
 
 # Accepted for upload; indexed with a placeholder summary until converted.
@@ -93,6 +105,75 @@ def load_xlsx(path: Path) -> str:
                 parts.append(" | ".join(cells))
     wb.close()
     return "\n".join(parts)
+
+
+def load_csv(path: Path) -> str:
+    parts: list[str] = [f"CSV file: {path.name}"]
+    max_rows = 5000
+    with path.open("r", newline="", encoding="utf-8", errors="replace") as fh:
+        sample = fh.read(8192)
+        fh.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel
+        reader = csv.reader(fh, dialect)
+        for i, row in enumerate(reader):
+            if i >= max_rows:
+                parts.append(f"... (rows beyond {max_rows:,} omitted)")
+                break
+            cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
+def load_pptx(path: Path) -> str:
+    from pptx import Presentation
+
+    prs = Presentation(str(path))
+    parts: list[str] = [f"PowerPoint presentation: {path.name}"]
+    for idx, slide in enumerate(prs.slides, start=1):
+        parts.append(f"\n## Slide {idx}")
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = "".join(run.text for run in para.runs).strip()
+                    if text:
+                        parts.append(text)
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    cells = [c.text.strip() for c in row.cells]
+                    line = " | ".join(c for c in cells if c)
+                    if line:
+                        parts.append(line)
+        if slide.has_notes_slide:
+            notes = (slide.notes_slide.notes_text_frame.text or "").strip()
+            if notes:
+                parts.append(f"[Speaker notes] {notes}")
+    return "\n".join(parts)
+
+
+def load_image(path: Path) -> str:
+    """OCR + visual analysis of an image so it becomes searchable/reviewable."""
+    from app.llm import describe_image
+
+    size_kb = path.stat().st_size / 1024
+    header = f"Image file: {path.name} ({size_kb:.0f} KB, {path.suffix.lower()})"
+    try:
+        analysis = describe_image(path)
+    except Exception:
+        analysis = ""
+
+    if analysis and analysis.strip():
+        return f"{header}\n\n{analysis.strip()}"
+
+    return (
+        f"{header}\n"
+        "Image stored, but automatic text/visual analysis was unavailable "
+        "(no AI key configured or the image could not be read). "
+        "Ask about it again once analysis is available, or upload a searchable PDF."
+    )
 
 
 def load_xer(path: Path) -> str:
@@ -250,6 +331,12 @@ def load_document(path: Path) -> str | None:
         return load_docx(path)
     if suffix == ".xlsx":
         return load_xlsx(path)
+    if suffix == ".csv":
+        return load_csv(path)
+    if suffix == ".pptx":
+        return load_pptx(path)
+    if suffix in IMAGE_EXTENSIONS:
+        return load_image(path)
     if suffix == ".xer":
         return load_xer(path)
     if suffix == ".xml":

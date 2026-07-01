@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import mimetypes
+from pathlib import Path
+
 from openai import BadRequestError, OpenAI
 
 from app.config import settings
@@ -87,6 +91,76 @@ def _chat(messages: list[dict[str, str]]) -> str:
                 continue
             raise
     raise RuntimeError("Could not find compatible parameters for the configured model")
+
+
+IMAGE_ANALYSIS_PROMPT = """You are analyzing an image uploaded to a USACE construction-document assistant so it can be searched and reviewed later.
+
+Produce two clearly labeled sections:
+
+1. "TRANSCRIBED TEXT:" — Transcribe ALL visible text verbatim, exactly as written (labels, titles, callouts, dimensions, table cells, stamps, signatures, logos with wordmarks, sheet numbers, revision blocks). Preserve numbers, units, and codes precisely. If there is no readable text, write "(none)".
+
+2. "VISUAL DESCRIPTION:" — Describe what the image shows in detail useful for a construction/engineering review: the type of image (photo, drawing, diagram, chart, logo, screenshot, scanned document), key objects or elements, colors, layout, any branding/logos and their colors/wording, and anything that looks like a defect, condition, or notable detail. If it is a chart or table, summarize the data it conveys.
+
+Be thorough and factual. Do not invent text or details that are not present."""
+
+PDF_OCR_PROMPT = """This is a scanned or image-based page from a USACE construction/engineering document. Transcribe ALL text on the page verbatim, exactly as written.
+
+- Preserve headings, section numbers, lists, and paragraph order.
+- Render tables row by row using " | " between cells.
+- Keep numbers, units, codes, and references precise.
+- Output only the transcribed text — no commentary, no description.
+- If the page has no readable text, output nothing."""
+
+IMAGE_MIME_BY_EXT = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+}
+
+
+def _vision_call(data: bytes, mime: str, prompt: str) -> str:
+    """Send image bytes + a prompt to the configured vision model.
+
+    Returns the model text, or "" if not possible (no key, empty data, or
+    model/network error). Callers decide on a fallback.
+    """
+    if not settings.openai_api_key or not data:
+        return ""
+    b64 = base64.b64encode(data).decode("ascii")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            ],
+        }
+    ]
+    try:
+        return _chat(messages)
+    except Exception:
+        return ""
+
+
+def describe_image(path: str | Path) -> str:
+    """OCR + visual description of an image via the configured vision model."""
+    p = Path(path)
+    try:
+        data = p.read_bytes()
+    except OSError:
+        return ""
+    mime = IMAGE_MIME_BY_EXT.get(p.suffix.lower()) or mimetypes.guess_type(str(p))[0] or "image/png"
+    return _vision_call(data, mime, IMAGE_ANALYSIS_PROMPT)
+
+
+def ocr_image_bytes(data: bytes, mime: str = "image/png") -> str:
+    """Verbatim OCR of a rendered page image (used for scanned PDF pages)."""
+    return _vision_call(data, mime, PDF_OCR_PROMPT)
 
 
 def _format_citation_block(citations: list[dict] | None) -> str:

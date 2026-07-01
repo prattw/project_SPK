@@ -144,6 +144,28 @@ def pack_chunks_for_llm(
         per_source[source] = per_source.get(source, 0) + 1
         used_chars += need
 
+    # Second pass: if budget remains, fill it with the best remaining chunks
+    # regardless of per-source caps. The first pass keeps multi-document
+    # comparisons fair; this pass ensures a single uploaded document (e.g. a spec
+    # being reviewed for conformance) can use the full context window instead of
+    # stopping at the per-source cap and starving the model of its own content.
+    if used_chars < budget:
+        selected_keys = {
+            f"{c.get('source')}:{c.get('page_start')}:{c.get('text', '')[:80]}" for c in selected
+        }
+        for chunk in ranked:
+            key = f"{chunk.get('source')}:{chunk.get('page_start')}:{chunk.get('text', '')[:80]}"
+            if key in selected_keys:
+                continue
+            block = format_chunk_for_prompt(chunk)
+            separator = 10 if selected else 0
+            need = len(block) + separator
+            if used_chars + need > budget:
+                continue
+            selected.append(chunk)
+            used_chars += need
+            selected_keys.add(key)
+
     skipped = len(ranked) - len(selected)
     if skipped:
         warnings.append(
