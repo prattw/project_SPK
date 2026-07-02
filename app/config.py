@@ -8,6 +8,9 @@ class Settings(BaseSettings):
 
     # OpenAI — chat (GPT) and embeddings with one API key
     openai_api_key: str = ""
+    # Override the API root for Azure OpenAI, a proxy, or a local gateway.
+    # Leave blank to use the OpenAI SDK default (https://api.openai.com/v1).
+    openai_base_url: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_max_tokens: int = 4096
     openai_embedding_model: str = "text-embedding-3-small"

@@ -41,6 +41,7 @@ In Railway → **Variables**, add:
 | Variable | Required | Notes |
 |----------|----------|--------|
 | `OPENAI_API_KEY` | Yes | GPT answers + embeddings |
+| `OPENAI_BASE_URL` | | Override API root (Azure/proxy/gateway); blank = OpenAI default |
 | `OPENAI_MODEL` | | `gpt-4o-mini` (default) |
 | `APP_API_KEY` | Recommended | Team access key; UI prompts for this |
 | `EMBEDDING_PROVIDER` | | `openai` (default) |
