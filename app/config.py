@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     pdf_ocr_min_chars: int = 24
     max_ocr_pages: int = 60  # cap OCR calls per document to bound time/cost
     allow_index_reset: bool = False  # set true only for local admin; never in production UI
+    warm_index_on_startup: bool = True  # background-load the vector index at boot so the first request isn't slow
 
     # Retrieval tuning for spec/submittal comparison sessions
     library_retrieval_slots: int = 24

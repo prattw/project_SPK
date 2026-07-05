@@ -49,6 +49,20 @@ class RAGService:
     def document_count(self) -> int:
         return self._collection.count()
 
+    def warm(self) -> int:
+        """Pull the on-disk vector index into memory so the first real
+        request doesn't pay the multi-second cold-load penalty. Safe to call
+        from a background thread; never raises. Returns the indexed chunk count.
+        """
+        count = self._collection.count()
+        if count:
+            # A tiny vector search forces the HNSW graph off disk into RAM.
+            try:
+                self._semantic_search("warm up", 1)
+            except Exception:
+                pass
+        return count
+
     def list_sources(self) -> list[str]:
         total = self.document_count
         if total == 0:
