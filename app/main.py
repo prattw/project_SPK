@@ -153,7 +153,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.7.1",
+    version="0.7.2",
     lifespan=lifespan,
 )
 
