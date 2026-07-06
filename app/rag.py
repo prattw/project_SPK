@@ -10,7 +10,7 @@ from chromadb.api.models.Collection import Collection
 
 from datetime import datetime, timezone
 
-from app.citations import citations_from_chunks
+from app.citations import citations_from_chunks, filter_citations_to_answer
 from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
 from app.doc_metadata import classify_upload_origin, enrich_library_fields
@@ -1079,13 +1079,25 @@ class RAGService:
             citations=citations,
             has_user_uploads=has_user_uploads,
         )
-        sources = sorted({c["source"] for c in selected})
+        # Only surface citations for documents the answer actually references —
+        # creative or conversational replies often ignore the retrieved context,
+        # and listing unrelated documents as citations is misleading.
+        citations = filter_citations_to_answer(citations, answer)
+        cited_sources = {c["source"] for c in citations}
+        sources = sorted(
+            {c["source"] for c in selected if c["source"] in cited_sources}
+            if citations
+            else set()
+        )
 
         pack_warnings = list(pack_warnings)
         pub_refs = expand_publication_refs(question, self.list_documents()) if include_library else []
         if include_library:
             lib_in_selected = [
-                c for c in selected if (c.get("upload_origin") or "").lower() == "library"
+                c
+                for c in selected
+                if (c.get("upload_origin") or "").lower() == "library"
+                and c.get("source") in cited_sources
             ]
             lib_names = sorted({c.get("doc_number") or c.get("source") for c in lib_in_selected})
             if lib_names:

@@ -106,6 +106,42 @@ def build_citation(
     }
 
 
+def _doc_mentioned(answer_lower: str, *idents: str | None) -> bool:
+    for ident in idents:
+        if not ident:
+            continue
+        text = str(ident).strip()
+        if not text:
+            continue
+        if text.lower() in answer_lower:
+            return True
+        # Filenames: also try the stem without the extension.
+        stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", text)
+        if stem != text and len(stem) > 8 and stem.lower() in answer_lower:
+            return True
+    return False
+
+
+def filter_citations_to_answer(citations: list[dict], answer: str) -> list[dict]:
+    """Keep only citations for documents the answer actually mentions.
+
+    Retrieval always packs session uploads and library chunks into the prompt,
+    but conversational or creative answers often use none of them. Showing the
+    full retrieved list as "Citations" misleads users into thinking unrelated
+    documents informed the answer.
+    """
+    if not citations or not answer:
+        return citations if answer else []
+
+    answer_lower = answer.lower()
+    kept = [
+        c
+        for c in citations
+        if _doc_mentioned(answer_lower, c.get("doc_number"), c.get("source"))
+    ]
+    return kept
+
+
 def citations_from_chunks(chunks: list[dict]) -> list[dict]:
     """Deduplicate citations from retrieved chunks."""
     seen: set[str] = set()
