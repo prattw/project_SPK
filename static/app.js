@@ -884,10 +884,11 @@ async function askQuestion(question) {
   setLoading(true);
   hideNotice();
 
-  // Every query searches the entire shared corpus — the full Document Library
-  // plus all user-uploaded files (from any user/session). No per-session focus
-  // filtering, so previously uploaded specs/submittals are always in scope.
+  // Search the full Document Library plus all user uploads, but prioritize files
+  // attached to this session so follow-ups still see uploaded chapter text.
   const payload = { question, include_library: true };
+  const focus = sessionFocusSources();
+  if (focus?.length) payload.focus_sources = focus;
   const history = sessionHistory();
   if (history?.length) payload.history = history.slice(0, -1);
 

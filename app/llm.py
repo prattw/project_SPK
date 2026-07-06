@@ -2,65 +2,109 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+import re
 from pathlib import Path
 
 from openai import BadRequestError, OpenAI
 
 from app.config import settings
 
-RESPONSE_FORMAT = """Format every answer like a USACE technical review:
+COMPLIANCE_FORMAT = """Format this answer like a USACE technical compliance review:
 
-- Organize with clear markdown headings and numbered items (e.g., "COMPLIANT ITEMS:", "NON-COMPLIANT OR MISSING ITEMS:", "Legal Requirements:", "Recommended Approach:" — choose headings that fit the question).
-- For compliance or comparison questions, label each item in bold with a status: **COMPLIANT**, **NON-COMPLIANT**, **PARTIALLY COMPLIANT**, or **NOT VERIFIED**, followed by the evidence.
+- Organize with clear markdown headings and numbered items (e.g., "COMPLIANT ITEMS:", "NON-COMPLIANT OR MISSING ITEMS:", "Recommended Approach:").
+- Label each item in bold with a status: **COMPLIANT**, **NON-COMPLIANT**, **PARTIALLY COMPLIANT**, or **NOT VERIFIED**, followed by the evidence.
 - Quote the source documents directly when the wording matters, and cite each fact inline using markdown links:
-  `[Document Number, Page N](url)` — e.g. `[ER 415-1-10, Page 42](https://www.publications.usace.army.mil/...)`.
-  Use the exact URL provided in the Available citations list when present.
+  `[Document Number, Page N](url)` — use the exact URL from the Available citations list when present.
 - End with a "SUMMARY:" or "Recommended Approach:" section when the answer supports a decision.
-- Then add a "Confidence Assessment:" — a level (High/Medium/Low) with a percentage and 1-3 sentences explaining what would raise or lower it (missing documents, possible newer revisions, items likely addressed elsewhere).
+- Then add a "Confidence Assessment:" — a level (High/Medium/Low) with a percentage and 1-3 sentences explaining what would raise or lower it.
 - Close with this disclaimer:
   "AI Disclaimer: This analysis is an informational aid only and does not replace the judgment, review, or responsibility of qualified USACE personnel. Verify all findings against current regulations and contract requirements."
 """
 
-SYSTEM_PROMPT = f"""You are a construction and federal acquisition assistant for USACE (U.S. Army Corps of Engineers) projects.
-Answer using only the provided document context.
+CONVERSATIONAL_FORMAT = """Answer naturally and directly, like a knowledgeable USACE colleague using ChatGPT.
 
-The document library follows USACE and federal acquisition conventions:
-- ER (Engineer Regulations), EM (Engineer Manuals), EP (Engineer Pamphlets), EC (Engineer Circulars), ECB (Engineering & Construction Bulletins)
-- CECW/CECI/CEMP memos (HQ policy), FAR, DFARS, AFARS, PGI (acquisition regulations)
-- UAI/UDG (USACE Acquisition Instruction and Desk Guide), including IDaC (Integrated Design and Construction)
+- Match the user's intent: Q&A, brainstorming, drafting, editing, policy analysis, or practical recommendations.
+- Use markdown when it helps (headings, lists, paragraphs) but do NOT force compliance-review templates or status labels unless the user explicitly asked for a compliance audit.
+- When you use facts from the provided context, cite inline: `[Document, Page N](url)` when URLs are available.
+- For drafting, rewriting, or "improve this" requests, give concrete revised prose or bullet suggestions — grammar, clarity, missing maps/tables, structure, etc.
+- If context is insufficient, say briefly what is missing instead of repeating "NOT VERIFIED" for every point.
+- Keep a practical, conversational tone. A short disclaimer is fine at the end when giving substantive technical guidance; skip rigid "Confidence Assessment" blocks unless uncertainty is high.
+"""
 
-When citing, include the document number when shown in the context label (e.g., "ER 1110-345-721").
-Authoritative public sources for current versions: USACE Publications (publications.usace.army.mil),
-the USACE Library Program, ERDC Library, and USACE Geospatial Open Data.
+_DRAFTING_HINT = """
+The user wants help drafting or revising text. Lead with the improved wording or outline they can use directly.
+"""
 
-When comparing documents, call out differences and alignments explicitly.
-If context is insufficient, say what is missing. Be precise and practical.
+_COMPLIANCE_RE = re.compile(
+    r"\b("
+    r"conform(?:ance|s|ing)?|compli(?:ance|ant)|non-?compliant|"
+    r"submittal review|verify against|audit|deficien(?:cy|cies)|"
+    r"compare .{0,80}\b(?:to|with|against)\b|"
+    r"does (?:this|the) (?:document|chapter|manual)\b.{0,40}\bmeet\b"
+    r")\b",
+    re.IGNORECASE,
+)
 
-{RESPONSE_FORMAT}"""
+_DRAFTING_RE = re.compile(
+    r"\b("
+    r"draft|write|compose|prepare|rewrite|revise|proofread|edit|"
+    r"create a chapter|areas for improvement|areas of improvement|improve(?:ment|ments)?|"
+    r"suggest(?:ion|ions)?|better way|make this clearer"
+    r")\b",
+    re.IGNORECASE,
+)
 
-
-GENERAL_SYSTEM_PROMPT = f"""You are a construction and federal acquisition assistant for USACE (U.S. Army Corps of Engineers) projects.
-No project documents have been uploaded, so answer from your general knowledge of USACE policies,
-publications, and federal acquisition practice.
-
-Be familiar with USACE and federal acquisition conventions:
+_USACE_DOCS = """The document library follows USACE and federal acquisition conventions:
 - ER (Engineer Regulations), EM (Engineer Manuals), EP (Engineer Pamphlets), EC (Engineer Circulars), ECB (Engineering & Construction Bulletins)
 - ETL (Engineer Technical Letters), UFC (Unified Facilities Criteria), UFGS (Unified Facilities Guide Specifications)
 - CECW/CECI/CEMP memos (HQ policy), FAR, DFARS, AFARS, PGI (acquisition regulations)
 - UAI/UDG (USACE Acquisition Instruction and Desk Guide), including IDaC (Integrated Design and Construction)
 - AR (Army Regulations) and DA PAM (Army Pamphlets)
 
-Cite document numbers when you reference specific publications (e.g., "ER 1110-345-721"), and recommend
-verifying current versions at USACE Publications (publications.usace.army.mil) or the Whole Building
-Design Guide (wbdg.org) for UFC/UFGS. Be precise and practical. If you are not certain, say so.
-
-{RESPONSE_FORMAT}
-
-Since no documents are uploaded, cite publication numbers from general knowledge instead of page-level
-citations, and reflect the lack of project documents in the Confidence Assessment."""
+When citing, include the document number when shown in the context label (e.g., "ER 1110-345-721").
+Authoritative public sources: USACE Publications (publications.usace.army.mil), the USACE Library Program, ERDC Library, and USACE Geospatial Open Data."""
 
 
-def _chat(messages: list[dict[str, str]]) -> str:
+def question_wants_compliance_review(question: str) -> bool:
+    """True when the user is asking for a formal compliance/conformance audit."""
+    if _COMPLIANCE_RE.search(question):
+        return True
+    if _DRAFTING_RE.search(question):
+        return False
+    return False
+
+
+def question_wants_drafting_help(question: str) -> bool:
+    return bool(_DRAFTING_RE.search(question))
+
+
+def _build_system_prompt(*, grounded: bool, compliance_mode: bool, drafting_mode: bool) -> str:
+    fmt = COMPLIANCE_FORMAT if compliance_mode else CONVERSATIONAL_FORMAT
+    drafting = _DRAFTING_HINT if drafting_mode and not compliance_mode else ""
+    if grounded:
+        return f"""You are a construction and federal acquisition assistant for USACE (U.S. Army Corps of Engineers) projects.
+Answer using the provided document context (session uploads and/or the Document Library).
+
+{_USACE_DOCS}
+
+When comparing documents, call out differences and alignments explicitly.
+If context is insufficient, say what is missing. Be precise and practical.
+{drafting}
+{fmt}"""
+    return f"""You are a construction and federal acquisition assistant for USACE (U.S. Army Corps of Engineers) projects.
+No project documents were retrieved for this question, so answer from your general knowledge of USACE policies,
+publications, and federal acquisition practice.
+
+{_USACE_DOCS}
+
+Be precise and practical. If you are not certain, say so.
+{drafting}
+{fmt}
+
+Since no project documents were retrieved, cite publication numbers from general knowledge instead of page-level citations."""
+
+
+def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
     """Call the chat API, handling parameter differences between model generations.
 
     Newer OpenAI models (gpt-5 family, o-series) require max_completion_tokens
@@ -69,12 +113,12 @@ def _chat(messages: list[dict[str, str]]) -> str:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
 
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url or None)
     kwargs: dict = {
         "model": settings.openai_model,
         "messages": messages,
         "max_completion_tokens": settings.openai_max_tokens,
-        "temperature": 0.2,
+        "temperature": temperature,
     }
     for _ in range(3):
         try:
@@ -190,10 +234,14 @@ def generate_general_answer(
     question: str,
     history: list[dict[str, str]] | None = None,
 ) -> str:
-    messages = [{"role": "system", "content": GENERAL_SYSTEM_PROMPT}]
+    compliance = question_wants_compliance_review(question)
+    drafting = question_wants_drafting_help(question)
+    system = _build_system_prompt(grounded=False, compliance_mode=compliance, drafting_mode=drafting)
+    temp = 0.2 if compliance else 0.45
+    messages = [{"role": "system", "content": system}]
     messages.extend(_history_messages(history))
     messages.append({"role": "user", "content": question})
-    return _chat(messages)
+    return _chat(messages, temperature=temp)
 
 
 def generate_answer(
@@ -202,16 +250,20 @@ def generate_answer(
     history: list[dict[str, str]] | None = None,
     citations: list[dict] | None = None,
 ) -> str:
+    compliance = question_wants_compliance_review(question)
+    drafting = question_wants_drafting_help(question)
+    system = _build_system_prompt(grounded=True, compliance_mode=compliance, drafting_mode=drafting)
+    temp = 0.2 if compliance else 0.45
     citation_block = _format_citation_block(citations)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": system}]
     messages.extend(_history_messages(history))
     messages.append(
         {
             "role": "user",
             "content": (
                 f"{citation_block}"
-                f"Context from uploaded project files:\n\n{context}\n\n---\n\nQuestion: {question}"
+                f"Context from session uploads and the Document Library:\n\n{context}\n\n---\n\nQuestion: {question}"
             ),
         }
     )
-    return _chat(messages)
+    return _chat(messages, temperature=temp)
