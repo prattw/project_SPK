@@ -114,9 +114,25 @@ def pack_chunks_for_llm(
     )
 
     preselected: list[dict[str, Any]] = []
+    if focus_set:
+        per_focus = max(focus_cap, 6)
+        for source in focus_sources or []:
+            focus_ranked = [c for c in ranked if c.get("source") == source][:per_focus]
+            for chunk in focus_ranked:
+                key = f"{chunk.get('source')}:{chunk.get('page_start')}:{chunk.get('text', '')[:80]}"
+                if chunk not in preselected:
+                    preselected.append(chunk)
+
     if min_library_chunks > 0:
         library_ranked = [c for c in ranked if _is_library_chunk(c, focus_set)]
-        preselected = library_ranked[:min_library_chunks]
+        lib_added = 0
+        for chunk in library_ranked:
+            if lib_added >= min_library_chunks:
+                break
+            if chunk in preselected:
+                continue
+            preselected.append(chunk)
+            lib_added += 1
 
     selected: list[dict[str, Any]] = list(preselected)
     used_chars = 0
@@ -183,9 +199,16 @@ def pack_chunks_for_llm(
         )
 
     if preselected:
-        warnings.append(
-            f"Reserved {len(preselected)} section(s) from the Document Library for USACE/UFC context."
-        )
+        lib_count = len([c for c in preselected if _is_library_chunk(c, focus_set)])
+        focus_count = len(preselected) - lib_count
+        if focus_count:
+            warnings.append(
+                f"Reserved {focus_count} section(s) from session upload(s) for review context."
+            )
+        if lib_count:
+            warnings.append(
+                f"Reserved {lib_count} section(s) from the Document Library for USACE/UFC context."
+            )
 
     if not selected and ranked:
         top = ranked[0]

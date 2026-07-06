@@ -15,6 +15,7 @@ COMPLIANCE_FORMAT = """Format this answer like a USACE technical compliance revi
 - Label each item in bold with a status: **COMPLIANT**, **NON-COMPLIANT**, **PARTIALLY COMPLIANT**, or **NOT VERIFIED**, followed by the evidence.
 - Quote the source documents directly when the wording matters, and cite each fact inline using markdown links:
   `[Document Number, Page N](url)` — use the exact URL from the Available citations list when present.
+- Uploaded project files have no public URL: cite them as plain bracketed text — `[filename.pdf, Pages 6-7]` — never as a link or file path.
 - End with a "SUMMARY:" or "Recommended Approach:" section when the answer supports a decision.
 - Then add a "Confidence Assessment:" — a level (High/Medium/Low) with a percentage and 1-3 sentences explaining what would raise or lower it.
 - Close with this disclaimer:
@@ -26,6 +27,7 @@ CONVERSATIONAL_FORMAT = """Answer naturally and directly, like a knowledgeable U
 - Match the user's intent: Q&A, brainstorming, drafting, editing, policy analysis, or practical recommendations.
 - Use markdown when it helps (headings, lists, paragraphs) but do NOT force compliance-review templates or status labels unless the user explicitly asked for a compliance audit.
 - When you use facts from the provided context, cite inline: `[Document, Page N](url)` when URLs are available.
+- Uploaded project files have no public URL: cite them as plain bracketed text — `[filename.pdf, Pages 6-7]` — never as a link or file path.
 - For drafting, rewriting, or "improve this" requests, give concrete revised prose or bullet suggestions — grammar, clarity, missing maps/tables, structure, etc.
 - If context is insufficient, say briefly what is missing instead of repeating "NOT VERIFIED" for every point.
 - Keep a practical, conversational tone. A short disclaimer is fine at the end when giving substantive technical guidance; skip rigid "Confidence Assessment" blocks unless uncertainty is high.
@@ -33,6 +35,12 @@ CONVERSATIONAL_FORMAT = """Answer naturally and directly, like a knowledgeable U
 
 _DRAFTING_HINT = """
 The user wants help drafting or revising text. Lead with the improved wording or outline they can use directly.
+"""
+
+_UPLOAD_REVIEW_HINT = """
+The context includes uploaded project file(s) (labeled with .pdf/.docx filenames) AND Engineer Regulations from the Document Library.
+Treat the uploaded file(s) as the document under review. Treat ER/EM/UFC excerpts as the standards to compare against.
+Do NOT treat an ER itself as the user's submittal unless the question explicitly asks about that ER's internal consistency.
 """
 
 _COMPLIANCE_RE = re.compile(
@@ -210,11 +218,20 @@ def ocr_image_bytes(data: bytes, mime: str = "image/png") -> str:
 def _format_citation_block(citations: list[dict] | None) -> str:
     if not citations:
         return ""
-    lines = ["Available citations (use these exact URLs in markdown links):"]
+    lines = [
+        "Available citations. For library publications, cite with markdown links using these "
+        "exact URLs. For uploaded project files (marked 'uploaded file — cite as plain text'), "
+        "cite as plain bracketed text with the file name and page(s), e.g. "
+        "[Merced Chapter 5 - Data Collection and Communication Networks.pdf, Pages 6-7] — "
+        "never include a URL or file path for uploaded files:"
+    ]
     for c in citations[:24]:
         label = c.get("label") or c.get("source") or "Source"
         url = c.get("url") or ""
-        lines.append(f"- [{label}]({url})")
+        if url.startswith("/download/"):
+            lines.append(f"- [{label}] (uploaded file — cite as plain text, no link)")
+        else:
+            lines.append(f"- [{label}]({url})")
     return "\n".join(lines) + "\n\n"
 
 
@@ -249,10 +266,14 @@ def generate_answer(
     context: str,
     history: list[dict[str, str]] | None = None,
     citations: list[dict] | None = None,
+    *,
+    has_user_uploads: bool = False,
 ) -> str:
     compliance = question_wants_compliance_review(question)
     drafting = question_wants_drafting_help(question)
     system = _build_system_prompt(grounded=True, compliance_mode=compliance, drafting_mode=drafting)
+    if has_user_uploads and compliance:
+        system += _UPLOAD_REVIEW_HINT
     temp = 0.2 if compliance else 0.45
     citation_block = _format_citation_block(citations)
     messages = [{"role": "system", "content": system}]

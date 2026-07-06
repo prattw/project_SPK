@@ -104,7 +104,12 @@ function trackSessionDocument(filename) {
 
 function sessionFocusSources() {
   const s = currentSession();
-  return s?.documents?.length ? [...s.documents] : null;
+  if (!s) return null;
+  const names = new Set(s.documents || []);
+  for (const m of s.messages || []) {
+    if (m.role === "file" && m.text) names.add(m.text);
+  }
+  return names.size ? [...names] : null;
 }
 
 function sessionHistory() {
@@ -887,6 +892,8 @@ async function askQuestion(question) {
   // Search the full Document Library plus all user uploads, but prioritize files
   // attached to this session so follow-ups still see uploaded chapter text.
   const payload = { question, include_library: true };
+  const s = currentSession();
+  if (s?.id) payload.session_id = s.id;
   const focus = sessionFocusSources();
   if (focus?.length) payload.focus_sources = focus;
   const history = sessionHistory();

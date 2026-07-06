@@ -38,12 +38,38 @@ def publication_url(doc_number: str | None, source: str | None = None) -> str:
     return USACE_LIBRARY
 
 
+def _label_base(source: str, doc_number: str | None) -> str:
+    """Document-number label, extended with any distinguishing filename text.
+
+    Two files can share a doc number (e.g. ER 1110-2-8156 and its Errata sheet);
+    appending the leftover filename tokens keeps their citations tellable apart.
+    """
+    if not doc_number or not doc_number.strip():
+        return source
+
+    base = doc_number.strip()
+    stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", source)
+    dn_chars = re.sub(r"[^A-Za-z0-9]", "", base).upper()
+
+    leftover_tokens = [
+        token
+        for token in re.split(r"[^A-Za-z0-9]+", stem)
+        if token and token.upper() not in dn_chars
+    ]
+    leftover = " ".join(leftover_tokens).strip()
+    if not leftover:
+        return base
+    if len(leftover) > 40:
+        leftover = leftover[:37].rstrip() + "…"
+    return f"{base} ({leftover})"
+
+
 def citation_label(
     source: str,
     doc_number: str | None = None,
     page: int | None = None,
 ) -> str:
-    base = doc_number.strip() if doc_number else source
+    base = _label_base(source, doc_number)
     if page is not None:
         return f"{base}, Page {page}"
     return base
@@ -58,10 +84,8 @@ def build_citation(
     upload_origin: str | None = None,
 ) -> dict[str, str | int | None]:
     page = page_start
-    if page_end and page_end != page_start:
-        label = citation_label(source, doc_number, page_start)
-        if page_start is not None:
-            label = f"{doc_number or source}, Pages {page_start}–{page_end}"
+    if page_end and page_end != page_start and page_start is not None:
+        label = f"{_label_base(source, doc_number)}, Pages {page_start}–{page_end}"
     else:
         label = citation_label(source, doc_number, page)
 

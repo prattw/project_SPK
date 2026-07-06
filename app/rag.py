@@ -31,6 +31,12 @@ PAGE_REF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_THIS_DOC_PATTERN = re.compile(
+    r"\b(this|the|my|our|uploaded|attached)\s+"
+    r"(document|file|chapter|manual|plan|drawing|pdf|report|submittal|wcm)\b",
+    re.IGNORECASE,
+)
+
 
 class RAGService:
     def __init__(self) -> None:
@@ -574,6 +580,74 @@ class RAGService:
 
         return seeded
 
+    def _user_uploads_for_session(self, session_id: str) -> list[str]:
+        if not session_id:
+            return []
+        return [
+            doc["source"]
+            for doc in self.list_documents()
+            if doc.get("session_id") == session_id
+            and (doc.get("upload_origin") or "").lower() == "user"
+            and doc.get("source")
+        ]
+
+    def _user_uploads_matching_question(self, question: str) -> list[str]:
+        q = question.lower()
+        matches: list[str] = []
+        for doc in self.list_documents():
+            if (doc.get("upload_origin") or "").lower() != "user":
+                continue
+            source = doc.get("source") or ""
+            if not source:
+                continue
+            stem = source.rsplit(".", 1)[0].lower()
+            if stem in q:
+                matches.append(source)
+                continue
+            words = [w for w in re.split(r"[\s\-_]+", stem) if len(w) >= 4]
+            hits = sum(1 for w in words if w in q)
+            if hits >= 2 or (len(words) == 1 and hits >= 1):
+                matches.append(source)
+        return matches
+
+    def _resolve_focus_sources(
+        self,
+        question: str,
+        focus_sources: list[str] | None,
+        session_id: str | None = None,
+    ) -> list[str] | None:
+        """Merge client focus with session uploads and filename mentions in the question."""
+        resolved: list[str] = [s for s in (focus_sources or []) if s]
+        seen = set(resolved)
+
+        for source in self._user_uploads_for_session(session_id or ""):
+            if source not in seen:
+                resolved.append(source)
+                seen.add(source)
+
+        for source in self._user_uploads_matching_question(question):
+            if source not in seen:
+                resolved.append(source)
+                seen.add(source)
+
+        # "this document" / "the uploaded file" style questions: if nothing has
+        # matched yet (e.g. stale session id after a re-upload), fall back to
+        # the most recently indexed user uploads so the review target is present.
+        if not resolved and _THIS_DOC_PATTERN.search(question):
+            user_docs = [
+                doc
+                for doc in self.list_documents()
+                if (doc.get("upload_origin") or "").lower() == "user" and doc.get("source")
+            ]
+            user_docs.sort(key=lambda d: d.get("indexed_at") or "", reverse=True)
+            for doc in user_docs[:5]:
+                source = doc["source"]
+                if source not in seen:
+                    resolved.append(source)
+                    seen.add(source)
+
+        return resolved or None
+
     def _semantic_search(
         self,
         query: str,
@@ -719,6 +793,7 @@ class RAGService:
         doc_numbers: list[str],
         *,
         slots: int = 16,
+        query: str | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch indexed chunks whose metadata doc_number matches a cited publication."""
         if not doc_numbers or self.document_count == 0:
@@ -727,6 +802,24 @@ class RAGService:
         found: list[dict[str, Any]] = []
         seen: set[str] = set()
         per_doc = max(4, slots // max(len(doc_numbers), 1))
+        matched_sources = self._sources_for_doc_numbers(doc_numbers)
+
+        # Prefer semantically relevant pages from the matched publications; a
+        # plain collection.get returns the first stored chunks, which for many
+        # ER PDFs are cover/blank pages with no requirement text.
+        if query and matched_sources:
+            hits = self._semantic_search(
+                query,
+                slots,
+                where={"source": {"$in": matched_sources}},
+                score_boost=0.4,
+            )
+            for chunk in hits:
+                key = f"{chunk.get('source')}:{chunk.get('page_start')}:{chunk.get('text', '')[:80]}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append(chunk)
 
         for doc_number in doc_numbers:
             try:
@@ -740,7 +833,7 @@ class RAGService:
             self._append_get_results(result, found, seen, score=1.35)
 
         if len(found) < slots:
-            for source in self._sources_for_doc_numbers(doc_numbers):
+            for source in matched_sources:
                 try:
                     result = self._collection.get(
                         where={"source": {"$eq": source}},
@@ -851,16 +944,27 @@ class RAGService:
                 where={"source": {"$in": focus}},
                 score_boost=0.15,
             )
+            # Direct publication lookup (e.g. "ER 8156" -> ER 1110-1-8156) must
+            # also run when session uploads are focused, otherwise cited ERs only
+            # get weak semantic matches and the standard's text never shows up.
+            pub_refs = expand_publication_refs(query, self.list_documents())
+            pub_chunks = (
+                self._chunks_by_doc_numbers(pub_refs, slots=max(12, library_slots // 2), query=query)
+                if pub_refs
+                else []
+            )
             library_reg = self._retrieve_library_regulatory(query, focus_set, slots=library_slots)
             broad = self._semantic_search(query, k)
             library_broad = [c for c in broad if c.get("source") not in focus_set][
                 : max(4, library_slots // 3)
             ]
-            semantic = self._merge_chunks(focused, library_reg, library_broad, broad, limit=k)
+            semantic = self._merge_chunks(
+                focused, pub_chunks, library_reg, library_broad, broad, limit=k + len(pub_chunks)
+            )
         elif include_library:
             pub_refs = expand_publication_refs(query, self.list_documents())
             pub_chunks = (
-                self._chunks_by_doc_numbers(pub_refs, slots=max(8, library_slots // 2))
+                self._chunks_by_doc_numbers(pub_refs, slots=max(12, library_slots // 2), query=query)
                 if pub_refs
                 else []
             )
@@ -913,6 +1017,7 @@ class RAGService:
         question: str,
         top_k: int | None = None,
         focus_sources: list[str] | None = None,
+        session_id: str | None = None,
         include_library: bool = True,
         explicit_sections: list[str] | None = None,
         history: list[dict[str, str]] | None = None,
@@ -929,6 +1034,8 @@ class RAGService:
                     "for grounded, citable answers."
                 ],
             }
+
+        focus_sources = self._resolve_focus_sources(question, focus_sources, session_id)
 
         candidates = self.retrieve(
             question,
@@ -960,7 +1067,18 @@ class RAGService:
             ),
         )
         citations = citations_from_chunks(selected)
-        answer = generate_answer(question, context, history=history, citations=citations)
+        has_user_uploads = any(
+            (c.get("upload_origin") or "").lower() == "user"
+            or (focus_sources and c.get("source") in focus_sources)
+            for c in selected
+        )
+        answer = generate_answer(
+            question,
+            context,
+            history=history,
+            citations=citations,
+            has_user_uploads=has_user_uploads,
+        )
         sources = sorted({c["source"] for c in selected})
 
         pack_warnings = list(pack_warnings)
