@@ -69,7 +69,7 @@ def _chat(messages: list[dict[str, str]]) -> str:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
 
-    client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url or None)
+    client = OpenAI(api_key=settings.openai_api_key)
     kwargs: dict = {
         "model": settings.openai_model,
         "messages": messages,

@@ -1,9 +1,7 @@
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -130,30 +128,18 @@ def _require_keys() -> None:
         )
 
 
-def _warm_index() -> None:
-    try:
-        count = get_rag().warm()
-        print(f"Vector index warmed: {count:,} chunks ready.")
-    except Exception as exc:  # noqa: BLE001 — never let warm-up crash the app
-        print(f"Index warm-up skipped: {exc}")
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if not settings.openai_api_key:
         print("Warning: OPENAI_API_KEY not set — get one at platform.openai.com.")
-    # Warm the vector index in a background thread so the first user request
-    # doesn't pay the multi-second cold-load cost. Running it off-thread (never
-    # inline in lifespan) keeps startup instant so the deploy health check passes.
-    if settings.warm_index_on_startup:
-        threading.Thread(target=_warm_index, name="index-warmup", daemon=True).start()
+    # Do not open Chroma on startup — reclassifying 600k+ chunks blocks deploy/OOMs.
     yield
 
 
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.7.2",
+    version="0.7.0",
     lifespan=lifespan,
 )
 
@@ -308,17 +294,13 @@ async def upload_file(
             detail=f"File exceeds {settings.max_upload_mb} MB limit.",
         )
 
-    # Offload all blocking disk/CPU/index work to a worker thread. The /upload
-    # handler is async, so calling these inline would freeze the single-worker
-    # event loop (and every other request) for the whole ingest — which, on a
-    # cold index, is minutes. run_in_threadpool keeps the server responsive.
-    path = await run_in_threadpool(save_upload, content, file.filename)
+    path = save_upload(content, file.filename)
 
     extra_meta: dict[str, str] = {"upload_origin": "user"}
     if session_id:
         extra_meta["session_id"] = session_id[:64]
 
-    use_background, page_count = await run_in_threadpool(pdf_needs_background, path)
+    use_background, page_count = pdf_needs_background(path)
     if use_background:
         job = start_background_ingest(path, path.name, page_count, extra_meta=extra_meta or None)
         return UploadResponse(
@@ -332,9 +314,7 @@ async def upload_file(
             pages_total=page_count,
         )
 
-    result = await run_in_threadpool(
-        ingest_path, path, source_name=path.name, extra_meta=extra_meta or None
-    )
+    result = ingest_path(path, source_name=path.name, extra_meta=extra_meta or None)
 
     if not result.get("files_processed"):
         raise HTTPException(status_code=422, detail=str(result.get("message")))

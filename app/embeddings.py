@@ -51,7 +51,7 @@ def _embed_openai(texts: list[str]) -> list[list[float]]:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured (needed for OpenAI embeddings)")
 
-    client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url or None)
+    client = OpenAI(api_key=settings.openai_api_key)
     delay = 2.0
     for attempt in range(_MAX_RETRIES):
         try:

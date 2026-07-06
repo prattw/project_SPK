@@ -38,7 +38,6 @@ class RAGService:
         self._chroma = chromadb.PersistentClient(path=str(settings.chroma_path))
         self._collection = self._get_or_create_collection()
         self._library_sources_cache: list[str] | None = None
-        self._documents_cache: list[dict[str, Any]] | None = None
 
     def _get_or_create_collection(self) -> Collection:
         return self._chroma.get_or_create_collection(
@@ -46,32 +45,9 @@ class RAGService:
             metadata={"hnsw:space": "cosine"},
         )
 
-    def _invalidate_caches(self) -> None:
-        """Drop cached document metadata after any write so the next read
-        rebuilds it. Reads (queries) reuse the cache to avoid re-scanning the
-        entire collection on every request."""
-        self._documents_cache = None
-        self._library_sources_cache = None
-
     @property
     def document_count(self) -> int:
         return self._collection.count()
-
-    def warm(self) -> int:
-        """Pull the on-disk vector index into memory so the first real
-        request doesn't pay the multi-second cold-load penalty. Safe to call
-        from a background thread; never raises. Returns the indexed chunk count.
-        """
-        count = self._collection.count()
-        if count:
-            try:
-                # Populate the per-source metadata cache (otherwise every query
-                # re-scans all chunks) and force the HNSW graph off disk into RAM.
-                self.list_documents()
-                self._semantic_search("warm up", 1)
-            except Exception:
-                pass
-        return count
 
     def list_sources(self) -> list[str]:
         total = self.document_count
@@ -94,8 +70,6 @@ class RAGService:
 
     def list_documents(self) -> list[dict[str, Any]]:
         """Aggregate per-source metadata for the Documents tab."""
-        if self._documents_cache is not None:
-            return self._documents_cache
         total = self.document_count
         if total == 0:
             return []
@@ -161,9 +135,7 @@ class RAGService:
         def _sort_key(doc: dict[str, Any]) -> tuple[str, str]:
             return (doc.get("doc_number") or doc.get("source") or "", doc.get("part") or "")
 
-        docs_sorted = sorted(docs, key=_sort_key)
-        self._documents_cache = docs_sorted
-        return docs_sorted
+        return sorted(docs, key=_sort_key)
 
     @staticmethod
     def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -357,7 +329,6 @@ class RAGService:
             embeddings=embeddings,
             metadatas=metadatas,
         )
-        self._invalidate_caches()
         return len(texts)
 
     def _upsert_records(
@@ -487,7 +458,6 @@ class RAGService:
         ids = existing.get("ids") or []
         if ids:
             self._collection.delete(ids=ids)
-            self._invalidate_caches()
         return len(ids)
 
     def _chunks_by_pages(self, pages: list[int]) -> list[dict[str, Any]]:
@@ -1049,7 +1019,6 @@ class RAGService:
     def reset_index(self) -> None:
         self._chroma.delete_collection(settings.collection_name)
         self._collection = self._get_or_create_collection()
-        self._invalidate_caches()
 
 
 _rag: RAGService | None = None
