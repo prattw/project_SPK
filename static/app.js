@@ -446,6 +446,158 @@ function setLoading(on) {
   refreshSendButton();
 }
 
+/* ---------- Waiting facts (shown while a query is in flight) ---------- */
+
+// Facts about Sacramento and California's Central Valley, rotated once a
+// minute while the user waits. Drawn without repeats until all 100 are used.
+const WAITING_FACTS = [
+  "Sacramento became California's permanent state capital in 1854.",
+  "Sacramento sits at the confluence of the Sacramento and American Rivers.",
+  "Sacramento is nicknamed the City of Trees for its dense urban canopy.",
+  "The Gold Rush began in 1848 at Sutter's Mill, about 40 miles east of Sacramento.",
+  "Old Sacramento preserves one of the largest collections of Gold Rush-era buildings in the West.",
+  "The Pony Express had its western terminus in Sacramento.",
+  "Construction of the first transcontinental railroad began in Sacramento in 1863.",
+  "The California State Railroad Museum in Old Sacramento is one of the largest railroad museums in North America.",
+  "After the floods of the 1860s, Sacramento raised its downtown streets by as much as 14 feet.",
+  "Underground tours still explore the buried original street level beneath Old Sacramento.",
+  "The gold-colored Tower Bridge opened in 1935, linking Sacramento and West Sacramento.",
+  "California's Capitol building in Sacramento was completed in 1874 after 14 years of construction.",
+  "Capitol Park in Sacramento holds trees from around the world, planted since the 1870s.",
+  "Sacramento is regularly ranked among the most ethnically diverse major cities in America.",
+  "The Sacramento Kings play at Golden 1 Center, one of the world's greenest arenas.",
+  "Golden 1 Center was the first indoor arena to earn LEED Platinum certification.",
+  "Sacramento hosts the California State Fair at Cal Expo every summer.",
+  "Sacramento is known as America's Farm-to-Fork Capital.",
+  "Sacramento's Farm-to-Fork Festival draws huge crowds to Capitol Mall each September.",
+  "The American River Parkway offers more than 30 miles of riverside trails through Sacramento.",
+  "Sutter's Fort, built in 1839, was one of the earliest non-Indigenous settlements in the Central Valley.",
+  "The Delta King, a 1920s riverboat, is permanently docked in Old Sacramento as a hotel.",
+  "The Crocker Art Museum, founded in 1885, is the longest continuously operating art museum in the West.",
+  "Sacramento summers are nearly cloudless, making it one of the sunniest cities in the country from July through September.",
+  "The evening Delta breeze cools Sacramento with air drawn in from the Sacramento-San Joaquin Delta.",
+  "The rose garden in Sacramento's McKinley Park has bloomed since 1928.",
+  "Sacramento's numbered-and-lettered street grid was laid out in 1848.",
+  "The Sacramento River is California's longest river, flowing roughly 400 miles.",
+  "The Sacramento Zoo opened in William Land Park in 1927.",
+  "Both Lake Tahoe and San Francisco are about a two-hour drive from Sacramento.",
+  "SMUD, Sacramento's community-owned electric utility, is one of the largest in the nation.",
+  "Sacramento's Fabulous Forties neighborhood is famous for its 1920s-1940s homes.",
+  "Author Joan Didion grew up in Sacramento.",
+  "The Sacramento Bee has been publishing since 1857.",
+  "Second Saturday art walks light up Sacramento's Midtown galleries every month.",
+  "Tower Records began in Sacramento in 1960, named after the Tower Theatre.",
+  "The Sacramento River Cats play Triple-A baseball at Sutter Health Park in West Sacramento.",
+  "Sutter Health Park became the temporary home of Major League Baseball's Athletics in 2025.",
+  "William Land Park spans more than 160 acres with a zoo, a golf course, and Fairytale Town.",
+  "Fairytale Town, a storybook park for children, opened in Sacramento in 1959.",
+  "Sacramento's Memorial Auditorium has hosted events since 1927.",
+  "Sacramento sits only about 30 feet above sea level.",
+  "Sacramento is one of the most flood-prone major U.S. cities, protected by an extensive levee network.",
+  "The Yolo Bypass can carry several times the Sacramento River's flow during major storms and doubles as wildlife habitat.",
+  "The U.S. Army Corps of Engineers built Folsom Dam on the American River, completed in 1956.",
+  "The Sacramento Weir, built in 1916, diverts floodwaters away from the city into the Yolo Bypass.",
+  "California's Central Valley stretches about 450 miles from Redding to Bakersfield.",
+  "The Central Valley averages 40 to 60 miles in width.",
+  "The Central Valley comprises the Sacramento Valley in the north and the San Joaquin Valley in the south.",
+  "The Central Valley produces about a quarter of America's food on roughly 1% of the nation's farmland.",
+  "More than 250 different crops are grown in the Central Valley.",
+  "The Central Valley produces the vast majority of the world's almonds.",
+  "Around 90% of America's processing tomatoes are grown in the Central Valley.",
+  "Sacramento Valley rice fields supply much of the sushi rice eaten in the United States.",
+  "The Sutter Buttes near Yuba City are often called the world's smallest mountain range.",
+  "Tulare Lake in the Central Valley was once the largest freshwater lake west of the Mississippi.",
+  "Tulare Lake briefly reappeared in the wet winter of 2023, flooding thousands of acres.",
+  "The Central Valley Project moves water through roughly 500 miles of canals and aqueducts.",
+  "The California Aqueduct carries water more than 400 miles from the Delta toward Southern California.",
+  "Shasta Lake, anchoring the Central Valley Project, is California's largest reservoir.",
+  "The Sacramento-San Joaquin Delta is part of the largest estuary on the U.S. West Coast.",
+  "Delta water supplies roughly 27 million Californians.",
+  "The Central Valley floor was historically a vast seasonal wetland roamed by tule elk and pronghorn.",
+  "Tule fog, the valley's dense winter ground fog, is named for the tule reeds of its wetlands.",
+  "Millions of migratory birds funnel through Central Valley wetlands each winter along the Pacific Flyway.",
+  "Snow geese gather by the hundreds of thousands at Sacramento Valley wildlife refuges each winter.",
+  "The San Joaquin River is California's second-longest river at about 366 miles.",
+  "Fresno is the largest city located entirely within the San Joaquin Valley.",
+  "Kern County, at the valley's southern end, produces most of California's oil.",
+  "The Bakersfield Sound of Buck Owens and Merle Haggard reshaped country music in the 1950s and 60s.",
+  "The Central Valley is so flat that elevation changes only a few hundred feet over hundreds of miles.",
+  "Interstate 5 and Highway 99 run nearly the full length of the Central Valley.",
+  "UC Davis, just west of Sacramento, is a world leader in agricultural and veterinary science.",
+  "Davis installed the first dedicated bike lanes in the United States in 1967.",
+  "The Central Valley's Mediterranean climate delivers hot, dry summers and cool, wet winters.",
+  "Central Valley soils rank among the most fertile on Earth, built from eons of Sierra Nevada sediment.",
+  "The Central Valley is a geologic trough filled with sediment several miles deep in places.",
+  "Groundwater supplies a large share of the Central Valley's water in drought years.",
+  "Groundwater pumping has sunk parts of the San Joaquin Valley nearly 30 feet since the 1920s.",
+  "The Great Flood of 1862 turned the Central Valley into an inland sea roughly 300 miles long.",
+  "Governor Leland Stanford reportedly traveled to his 1862 inauguration by rowboat through flooded Sacramento streets.",
+  "John Sutter's 1839 Mexican land grant of about 48,000 acres became New Helvetia, the seed of Sacramento.",
+  "Sacramento, incorporated in 1850, is one of California's oldest incorporated cities.",
+  "The Big Four who financed the transcontinental railroad were Sacramento merchants.",
+  "The transcontinental railroad's western construction began near Front and K Streets in Sacramento.",
+  "Sacramento's historic Chinatown was among the earliest Chinese communities in California.",
+  "February's almond bloom across the valley is the largest managed pollination event on Earth.",
+  "Nearly all U.S. commercial raisins come from the San Joaquin Valley around Fresno.",
+  "Lodi, in the northern San Joaquin Valley, is known as a Zinfandel wine capital.",
+  "Chico's Bidwell Park is one of the largest municipal parks in the United States.",
+  "Wild deer and turkeys roam the Effie Yeaw Nature Center along the American River in Sacramento.",
+  "The California State Capitol dome was modeled in part on the U.S. Capitol.",
+  "A 43-mile deepwater ship channel links West Sacramento's port to San Francisco Bay.",
+  "Flooded winter rice fields near Sacramento create temporary wetlands visible from space.",
+  "Sacramento is nicknamed Camellia City and held an annual Camellia Festival for decades.",
+  "The Sacramento Valley grows virtually all of California's rice crop.",
+  "Caltrans, headquartered in Sacramento, maintains more than 50,000 lane miles of state highways.",
+  "The Sacramento region is home to more than 200,000 acres of protected wildlife habitat.",
+  "Sacramento's Land Park neighborhood surrounds one of the city's oldest public golf courses.",
+  "The Sacramento District of the U.S. Army Corps of Engineers manages flood risk for much of the Central Valley.",
+];
+
+let factBag = [];
+
+function nextWaitingFact() {
+  if (!factBag.length) {
+    factBag = [...WAITING_FACTS];
+    for (let i = factBag.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [factBag[i], factBag[j]] = [factBag[j], factBag[i]];
+    }
+  }
+  return factBag.pop();
+}
+
+let waitingEl = null;
+let waitingTimer = null;
+
+function showWaitingFacts() {
+  hideWaitingFacts();
+  waitingEl = document.createElement("div");
+  waitingEl.className = "msg waiting";
+  waitingEl.innerHTML = `
+    <p class="waiting-status">Working on your answer&hellip; large files can take 3&ndash;15 minutes.</p>
+    <p class="waiting-fact"></p>
+  `;
+  messagesEl.appendChild(waitingEl);
+  const factEl = waitingEl.querySelector(".waiting-fact");
+  const showFact = () => {
+    factEl.textContent = `While you wait — did you know? ${nextWaitingFact()}`;
+  };
+  showFact();
+  chatScroll.scrollTop = chatScroll.scrollHeight;
+  waitingTimer = setInterval(showFact, 60000);
+}
+
+function hideWaitingFacts() {
+  if (waitingTimer) {
+    clearInterval(waitingTimer);
+    waitingTimer = null;
+  }
+  if (waitingEl) {
+    waitingEl.remove();
+    waitingEl = null;
+  }
+}
+
 /* ---------- In-composer upload status chips ---------- */
 
 function clearUploadChips() {
@@ -929,6 +1081,7 @@ async function askQuestion(question) {
   addMessage("user", question);
   setLoading(true);
   hideNotice();
+  showWaitingFacts();
 
   // Search the full Document Library plus all user uploads, but prioritize files
   // attached to this session so follow-ups still see uploaded chapter text.
@@ -946,7 +1099,22 @@ async function askQuestion(question) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      // Railway's proxy returns plain text (e.g. "upstream error") when a
+      // query outlives its timeout — the answer never reached the browser.
+      hideWaitingFacts();
+      addMessage(
+        "error",
+        "The server took too long to respond and the connection was dropped by the hosting proxy. " +
+          "This can happen on very large or complex questions. Try again — repeat queries are " +
+          "usually faster — or narrow the question to a specific document or section."
+      );
+      return;
+    }
+    hideWaitingFacts();
     if (!res.ok) {
       addMessage("error", data.detail || "Query failed");
       return;
@@ -956,6 +1124,7 @@ async function askQuestion(question) {
   } catch (err) {
     addMessage("error", err.message || "Network error — is the server running?");
   } finally {
+    hideWaitingFacts();
     setLoading(false);
   }
 }
