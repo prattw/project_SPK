@@ -9,7 +9,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.auth import ApiKeyMiddleware, require_api_key
+from app.auth import (
+    ApiKeyMiddleware,
+    auth_required,
+    email_on_roster,
+    issue_login_token,
+    require_api_key,
+    roster_enabled,
+)
 from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
@@ -154,7 +161,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.7.2",
+    version="0.7.3",
     lifespan=lifespan,
 )
 
@@ -179,6 +186,30 @@ def chat_ui():
     return {"message": "UI not found. API is running — see /docs"}
 
 
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+
+
+class LoginResponse(BaseModel):
+    token: str
+    email: str
+    expires_at: int
+
+
+@app.post("/login", response_model=LoginResponse)
+def login(body: LoginRequest) -> LoginResponse:
+    email = body.email.strip().lower()
+    if not roster_enabled():
+        raise HTTPException(status_code=404, detail="Roster sign-in is not enabled.")
+    if not email_on_roster(email):
+        raise HTTPException(
+            status_code=403,
+            detail="This email is not on the access roster. Contact the site administrator.",
+        )
+    token, expires_at = issue_login_token(email)
+    return LoginResponse(token=token, email=email, expires_at=expires_at)
+
+
 def _embeddings_configured() -> bool:
     if settings.embedding_provider.lower() == "voyage":
         return bool(settings.voyage_api_key)
@@ -195,7 +226,7 @@ def health() -> HealthResponse:
         data_dir=str(settings.data_path),
         llm=settings.openai_model,
         embeddings=f"{settings.embedding_provider}:{settings.openai_embedding_model if settings.embedding_provider == 'openai' else settings.voyage_embedding_model}",
-        auth_required=bool(settings.app_api_key),
+        auth_required=auth_required(),
         llm_configured=bool(settings.openai_api_key),
         embeddings_configured=_embeddings_configured(),
         context_limits=ContextLimits(

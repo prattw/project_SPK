@@ -38,10 +38,46 @@ let userRole = "admin";
 let isQuerying = false;
 let activeUploads = 0;
 
+/* ---------- Auth token (24-hour roster sign-in) ---------- */
+
+const AUTH_TOKEN_KEY = "spk_auth_token";
+const AUTH_EXPIRES_KEY = "spk_auth_expires";
+
+function authToken() {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  const expires = Number(localStorage.getItem(AUTH_EXPIRES_KEY) || 0);
+  if (!token || !expires || Date.now() / 1000 >= expires) return null;
+  return token;
+}
+
+function clearAuthToken() {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_EXPIRES_KEY);
+}
+
+function requireSignIn() {
+  clearAuthToken();
+  loginScreen.hidden = false;
+  updateLoginButton();
+  loginEmail.focus();
+}
+
+function withToken(url) {
+  // Plain <a href> downloads can't send headers — pass the token in the query.
+  const token = authToken();
+  if (!token || typeof url !== "string" || !url.startsWith("/download/")) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+}
+
 /* ---------- Fetch helper ---------- */
 
 async function apiFetch(url, options = {}) {
-  return fetch(url, { credentials: "same-origin", ...options });
+  const token = authToken();
+  const headers = { ...(options.headers || {}) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(url, { credentials: "same-origin", ...options, headers });
+  if (res.status === 401) requireSignIn();
+  return res;
 }
 
 /* ---------- Session history (stored in this browser) ---------- */
@@ -336,7 +372,7 @@ function renderMessage(role, text, sources = [], citations = []) {
         .slice(0, 12)
         .map(
           (item) =>
-            `<a href="${escapeHtml(item.url)}"${documentLinkAttrs(item.url)}>${escapeHtml(item.label)}</a>`
+            `<a href="${escapeHtml(withToken(item.url))}"${documentLinkAttrs(item.url)}>${escapeHtml(item.label)}</a>`
         )
         .join(" · ");
     div.appendChild(c);
@@ -554,7 +590,7 @@ function renderDocGrid(container, docs, emptyMessage, options = {}) {
       ? `<button type="button" class="doc-delete" title="Remove from uploads" data-source="${escapeHtml(doc.source)}">×</button>`
       : "";
     row.innerHTML = `
-      <a href="${escapeHtml(href)}"${documentLinkAttrs(href)}>${escapeHtml(label)}</a>
+      <a href="${escapeHtml(withToken(href))}"${documentLinkAttrs(href)}>${escapeHtml(label)}</a>
       <span class="doc-type">${escapeHtml(typeLine)}</span>
       <span class="doc-date">${escapeHtml(formatDocDate(doc.updated_at || doc.indexed_at))}</span>
       ${deleteBtn}
@@ -732,6 +768,11 @@ function uploadOne(file, sessionId, onProgress) {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/upload");
     xhr.withCredentials = true;
+    const token = authToken();
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.addEventListener("load", () => {
+      if (xhr.status === 401) requireSignIn();
+    });
     xhr.upload.addEventListener("progress", (e) => {
       if (e.lengthComputable && onProgress) {
         onProgress(Math.round((e.loaded / e.total) * 100));
@@ -1120,24 +1161,50 @@ function enterApp() {
   bootstrap();
 }
 
+function showLoginError(message) {
+  loginError.textContent = message || "Enter a valid @usace.army.mil email address.";
+  loginError.hidden = false;
+}
+
 loginEmail.addEventListener("input", updateLoginButton);
-loginForm.addEventListener("submit", (e) => {
+loginForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const email = loginEmail.value.trim();
   if (!isValidUsaceEmail(email)) {
-    loginError.hidden = false;
+    showLoginError("Enter a valid @usace.army.mil email address.");
     loginEmail.focus();
     return;
   }
-  localStorage.setItem(USER_EMAIL_KEY, email.toLowerCase());
-  enterApp();
+  loginSubmit.disabled = true;
+  try {
+    const res = await fetch("/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showLoginError(data.detail || "Sign-in failed. Try again.");
+      loginEmail.focus();
+      return;
+    }
+    localStorage.setItem(USER_EMAIL_KEY, data.email);
+    localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+    localStorage.setItem(AUTH_EXPIRES_KEY, String(data.expires_at));
+    enterApp();
+  } catch {
+    showLoginError("Could not reach the server. Try again.");
+  } finally {
+    loginSubmit.disabled = false;
+    updateLoginButton();
+  }
 });
 
-// First screen: show the login gate unless a valid USACE email is already stored.
-const savedUserEmail = localStorage.getItem(USER_EMAIL_KEY);
-if (savedUserEmail && isValidUsaceEmail(savedUserEmail)) {
+// First screen: require a valid, unexpired sign-in token (24-hour sessions).
+if (authToken()) {
   enterApp();
 } else {
+  clearAuthToken();
   loginScreen.hidden = false;
   updateLoginButton();
   loginEmail.focus();

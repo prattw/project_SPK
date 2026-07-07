@@ -26,6 +26,21 @@ class Settings(BaseSettings):
     app_api_key: str = ""
     max_upload_mb: int = 300
 
+    # Access roster — only these emails can sign in. Comma-separated; override
+    # with the ACCESS_ROSTER env var. Empty string disables the roster gate.
+    access_roster: str = (
+        "william.a.pratt@usace.army.mil,"
+        "daniel.t.osborne@usace.army.mil,"
+        "cameron.l.sessions@usace.army.mil,"
+        "ike.m.ukachi@usace.army.mil,"
+        "nicholas.j.ivy@usace.army.mil,"
+        "jesse.j.schlunegger@usace.army.mil"
+    )
+    # Secret for signing login tokens. Set AUTH_SECRET in production so sessions
+    # survive restarts; falls back to APP_API_KEY, then an ephemeral boot secret.
+    auth_secret: str = ""
+    auth_token_hours: int = 24  # users must sign in again after this long
+
     chroma_persist_dir: str = "./chroma_db"
     data_dir: str = "./data"
 
@@ -58,6 +73,14 @@ class Settings(BaseSettings):
     section_search_limit: int = 40
     min_library_chunks_in_context: int = 12
     library_subquery_slots: int = 8
+
+    @property
+    def roster_emails(self) -> frozenset[str]:
+        return frozenset(
+            email.strip().lower()
+            for email in self.access_roster.split(",")
+            if email.strip()
+        )
 
     @property
     def chroma_path(self) -> Path:

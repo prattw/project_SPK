@@ -43,13 +43,24 @@ In Railway → **Variables**, add:
 | `OPENAI_API_KEY` | Yes | GPT answers + embeddings |
 | `OPENAI_BASE_URL` | | Override API root (Azure/proxy/gateway); blank = OpenAI default |
 | `OPENAI_MODEL` | | `gpt-4o-mini` (default) |
-| `APP_API_KEY` | Recommended | Team access key; UI prompts for this |
+| `AUTH_SECRET` | Recommended | Signs 24-hour login tokens; keep stable across deploys |
+| `ACCESS_ROSTER` | | Comma-separated allowed emails; defaults to the built-in roster |
+| `AUTH_TOKEN_HOURS` | | `24` (default) — re-login interval |
+| `APP_API_KEY` | | Optional shared key for scripts/automation (bypasses roster) |
 | `EMBEDDING_PROVIDER` | | `openai` (default) |
 | `MAX_UPLOAD_MB` | | `300` for large PDFs |
 | `CHROMA_PERSIST_DIR` | | `/app/chroma_db` |
 | `DATA_DIR` | | `/app/data` |
 
-Generate a strong `APP_API_KEY` (e.g. `openssl rand -hex 32`).
+Generate a strong `AUTH_SECRET` (e.g. `openssl rand -hex 32`). Without it,
+login sessions are invalidated on every restart/redeploy (users just sign in again).
+
+### Access roster
+
+Sign-in is restricted to the roster of approved `@usace.army.mil` emails
+(built into `app/config.py`, override with `ACCESS_ROSTER`). Users sign in
+with their email and get a signed session token that expires after 24 hours,
+after which they must sign in again.
 
 ## 4. Persistent storage (critical)
 
@@ -64,7 +75,7 @@ Without volumes, uploads and the vector index are **lost on redeploy**.
 
 1. **Settings** → generate a **public domain**
 2. Open `https://YOUR-APP.up.railway.app/`
-3. Enter your `APP_API_KEY` when prompted (stored in browser session)
+3. Sign in with a roster email (session lasts 24 hours)
 
 ## 6. Upload timeout
 
@@ -79,7 +90,7 @@ Large PDFs (2000 pages) need a long ingest. If uploads fail:
 |--|-------|---------|
 | Start | `./start.sh` | Auto on push |
 | URL | http://127.0.0.1:8000 | Public domain |
-| Auth | Optional (`APP_API_KEY` unset) | Set `APP_API_KEY` |
+| Auth | Roster sign-in (24 h sessions) | Roster sign-in + `AUTH_SECRET` |
 | Data | `./data`, `./chroma_db` | Mounted volumes |
 
 ## Verify deployment
@@ -88,4 +99,4 @@ Large PDFs (2000 pages) need a long ingest. If uploads fail:
 curl https://YOUR-APP.up.railway.app/health
 ```
 
-Expect `"status":"ok"` and `"auth_required":true` if `APP_API_KEY` is set.
+Expect `"status":"ok"` and `"auth_required":true` (the access roster is active).
