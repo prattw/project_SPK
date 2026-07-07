@@ -858,6 +858,32 @@ function hideActiveJob() {
   activeJobsEl.innerHTML = "";
 }
 
+async function pollQueryJob(jobId) {
+  const interval = 2000;
+
+  for (;;) {
+    let res;
+    let job;
+    try {
+      res = await apiFetch(`/jobs/${jobId}`);
+      job = await readJsonResponse(res);
+    } catch (err) {
+      return { ok: false, message: err.message || "Could not check query status." };
+    }
+    if (!res.ok) {
+      return { ok: false, message: job.detail || "Could not check query status." };
+    }
+    if (job.status === "queued" || job.status === "running") {
+      await new Promise((r) => setTimeout(r, interval));
+      continue;
+    }
+    if (job.status === "done" && job.result) {
+      return { ok: true, data: job.result, elapsed_ms: job.elapsed_ms };
+    }
+    return { ok: false, message: job.message || "Query failed." };
+  }
+}
+
 async function pollJob(jobId, filename, pagesTotal, onProgress) {
   const interval = 3000;
 
@@ -1101,26 +1127,34 @@ async function askQuestion(question) {
     });
     let data;
     try {
-      data = await res.json();
+      data = await readJsonResponse(res);
     } catch {
-      // Railway's proxy returns plain text (e.g. "upstream error") when a
-      // query outlives its timeout — the answer never reached the browser.
       hideWaitingFacts();
       addMessage(
         "error",
-        "The server took too long to respond and the connection was dropped by the hosting proxy. " +
-          "This can happen on very large or complex questions. Try again — repeat queries are " +
-          "usually faster — or narrow the question to a specific document or section."
+        "The server returned an unexpected response when starting your query. Please try again."
       );
       return;
     }
-    hideWaitingFacts();
     if (!res.ok) {
+      hideWaitingFacts();
       addMessage("error", data.detail || "Query failed");
       return;
     }
-    addMessage("assistant", data.answer, data.sources || [], data.citations || []);
-    showWarnings(data.context_warnings, "This answer");
+
+    const result = await pollQueryJob(data.job_id);
+    hideWaitingFacts();
+    if (!result.ok) {
+      addMessage("error", result.message || "Query failed");
+      return;
+    }
+    addMessage(
+      "assistant",
+      result.data.answer,
+      result.data.sources || [],
+      result.data.citations || []
+    );
+    showWarnings(result.data.context_warnings, "This answer");
   } catch (err) {
     addMessage("error", err.message || "Network error — is the server running?");
   } finally {

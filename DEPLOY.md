@@ -50,7 +50,8 @@ In Railway → **Variables**, add:
 | `EMBEDDING_PROVIDER` | | `openai` (default) |
 | `MAX_UPLOAD_MB` | | `300` for large PDFs |
 | `CHROMA_PERSIST_DIR` | | `/app/chroma_db` |
-| `DATA_DIR` | | `/app/data` |
+| `USAGE_DB_PATH` | | `/app/data/usage.db` — login/query/upload analytics |
+| `USAGE_ADMIN_EMAILS` | | Comma-separated emails allowed to call `GET /usage/summary` |
 
 Generate a strong `AUTH_SECRET` (e.g. `openssl rand -hex 32`). Without it,
 login sessions are invalidated on every restart/redeploy (users just sign in again).
@@ -61,6 +62,21 @@ Sign-in is restricted to the roster of approved `@usace.army.mil` emails
 (built into `app/config.py`, override with `ACCESS_ROSTER`). Users sign in
 with their email and get a signed session token that expires after 24 hours,
 after which they must sign in again.
+
+### Usage analytics
+
+The app logs logins, query latency, token usage, and uploads to a SQLite file
+(`USAGE_DB_PATH`, default `./data/usage.db`). Put this on the same persistent
+volume as `/app/data` so records survive redeploys.
+
+Administrators (`USAGE_ADMIN_EMAILS`) can review activity:
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" https://YOUR-APP.up.railway.app/usage/summary
+```
+
+Tracked fields include who logged in, per-query prompt-to-answer time, token
+counts (LLM + embeddings), and uploaded file names/sizes.
 
 ## 4. Persistent storage (critical)
 

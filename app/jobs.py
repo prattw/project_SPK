@@ -1,37 +1,58 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from app.ingest import ingest_path
+from app.token_usage import get_tracking, start_tracking
+from app.usage import record_query_finish, record_query_start
 
 _lock = threading.Lock()
-_jobs: dict[str, "IngestJob"] = {}
+_jobs: dict[str, "Job"] = {}
 
 
 @dataclass
-class IngestJob:
+class Job:
     id: str
-    filename: str
+    kind: str  # ingest | query
     status: str = "queued"  # queued | running | done | error
+    message: str = ""
+    created_at: float = field(default_factory=time.time)
+    started_at: float | None = None
+    finished_at: float | None = None
+    # ingest
+    filename: str = ""
     pages_total: int = 0
     pages_done: int = 0
     chunks_indexed: int = 0
-    message: str = ""
     warnings: list[str] = field(default_factory=list)
     extra_meta: dict[str, str] | None = None
+    # query
+    result: dict[str, Any] | None = None
+    query_email: str | None = None
+    query_session_id: str | None = None
+    query_question: str = ""
+
+    @property
+    def elapsed_ms(self) -> int | None:
+        if not self.started_at:
+            return None
+        end = self.finished_at or time.time()
+        return max(0, int((end - self.started_at) * 1000))
 
 
-def create_job(
+def create_ingest_job(
     filename: str,
     pages_total: int = 0,
     extra_meta: dict[str, str] | None = None,
-) -> IngestJob:
-    job = IngestJob(
+) -> Job:
+    job = Job(
         id=str(uuid.uuid4()),
+        kind="ingest",
         filename=filename,
         pages_total=pages_total,
         extra_meta=extra_meta,
@@ -41,7 +62,31 @@ def create_job(
     return job
 
 
-def get_job(job_id: str) -> IngestJob | None:
+def create_query_job(
+    *,
+    question: str,
+    email: str | None,
+    session_id: str | None,
+) -> Job:
+    job = Job(
+        id=str(uuid.uuid4()),
+        kind="query",
+        query_question=question,
+        query_email=email,
+        query_session_id=session_id,
+    )
+    with _lock:
+        _jobs[job.id] = job
+    record_query_start(
+        job_id=job.id,
+        email=email,
+        session_id=session_id,
+        question=question,
+    )
+    return job
+
+
+def get_job(job_id: str) -> Job | None:
     with _lock:
         return _jobs.get(job_id)
 
@@ -65,7 +110,7 @@ def run_ingest_job(
         _update(job_id, pages_done=done, pages_total=total, status="running")
 
     try:
-        _update(job_id, status="running", message="Indexing…")
+        _update(job_id, status="running", started_at=time.time(), message="Indexing…")
         result = ingest_path(
             path,
             source_name,
@@ -78,6 +123,7 @@ def run_ingest_job(
             _update(
                 job_id,
                 status="done",
+                finished_at=time.time(),
                 chunks_indexed=int(result.get("chunks_indexed", 0)),
                 message=str(result.get("message", "Done.")),
                 warnings=list(result.get("warnings", [])),
@@ -88,10 +134,38 @@ def run_ingest_job(
             _update(
                 job_id,
                 status="error",
+                finished_at=time.time(),
                 message=str(result.get("message", "Indexing failed.")),
             )
     except Exception as exc:  # noqa: BLE001 — surface to client
-        _update(job_id, status="error", message=str(exc))
+        _update(job_id, status="error", finished_at=time.time(), message=str(exc))
+
+
+def run_query_job(job_id: str, query_kwargs: dict[str, Any]) -> None:
+    from app.rag import get_rag
+
+    try:
+        _update(job_id, status="running", started_at=time.time(), message="Working on your answer…")
+        start_tracking()
+        result = get_rag().query(**query_kwargs)
+        tokens = get_tracking()
+        _update(
+            job_id,
+            status="done",
+            finished_at=time.time(),
+            result=result,
+            message="Complete.",
+        )
+        record_query_finish(job_id=job_id, status="done", tokens=tokens)
+    except Exception as exc:  # noqa: BLE001 — surface to client
+        tokens = get_tracking()
+        _update(
+            job_id,
+            status="error",
+            finished_at=time.time(),
+            message=str(exc),
+        )
+        record_query_finish(job_id=job_id, status="error", tokens=tokens, error=str(exc))
 
 
 def start_background_ingest(
@@ -99,11 +173,28 @@ def start_background_ingest(
     source_name: str,
     pages_total: int,
     extra_meta: dict[str, str] | None = None,
-) -> IngestJob:
-    job = create_job(source_name, pages_total=pages_total, extra_meta=extra_meta)
+) -> Job:
+    job = create_ingest_job(source_name, pages_total=pages_total, extra_meta=extra_meta)
     thread = threading.Thread(
         target=run_ingest_job,
         args=(job.id, path, source_name, extra_meta),
+        daemon=True,
+    )
+    thread.start()
+    return job
+
+
+def start_background_query(
+    *,
+    question: str,
+    email: str | None,
+    session_id: str | None,
+    query_kwargs: dict[str, Any],
+) -> Job:
+    job = create_query_job(question=question, email=email, session_id=session_id)
+    thread = threading.Thread(
+        target=run_query_job,
+        args=(job.id, query_kwargs),
         daemon=True,
     )
     thread.start()

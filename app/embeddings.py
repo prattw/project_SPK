@@ -5,6 +5,7 @@ import time
 from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
 
 from app.config import settings
+from app.token_usage import record_embedding_tokens
 
 # Transient OpenAI errors worth retrying with backoff (rate limits, network blips).
 _RETRYABLE = (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
@@ -59,6 +60,9 @@ def _embed_openai(texts: list[str]) -> list[list[float]]:
                 model=settings.openai_embedding_model,
                 input=texts,
             )
+            usage = getattr(response, "usage", None)
+            if usage:
+                record_embedding_tokens(getattr(usage, "total_tokens", 0) or 0)
             return [item.embedding for item in response.data]
         except _RETRYABLE:
             if attempt == _MAX_RETRIES - 1:

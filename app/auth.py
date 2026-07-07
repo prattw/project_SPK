@@ -99,6 +99,16 @@ def auth_required() -> bool:
     return bool(settings.app_api_key) or roster_enabled()
 
 
+def authenticated_email(request: Request) -> str | None:
+    """Return the roster email for the current request, if any."""
+    provided = _extract_credential(request)
+    if not provided:
+        return None
+    if settings.app_api_key and provided == settings.app_api_key:
+        return None
+    return verify_login_token(provided)
+
+
 def require_api_key(request: Request) -> None:
     if not auth_required():
         return

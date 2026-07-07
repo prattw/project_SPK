@@ -8,6 +8,7 @@ from pathlib import Path
 from openai import BadRequestError, OpenAI
 
 from app.config import settings
+from app.token_usage import record_chat_usage
 
 COMPLIANCE_FORMAT = """Format this answer like a USACE technical compliance review:
 
@@ -132,6 +133,12 @@ def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
     for _ in range(3):
         try:
             response = client.chat.completions.create(**kwargs)
+            usage = getattr(response, "usage", None)
+            if usage:
+                record_chat_usage(
+                    prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                    completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                )
             return (response.choices[0].message.content or "").strip()
         except BadRequestError as exc:
             param = getattr(exc, "param", None) or ""

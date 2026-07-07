@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from app.auth import (
     ApiKeyMiddleware,
     auth_required,
+    authenticated_email,
     email_on_roster,
     issue_login_token,
     require_api_key,
@@ -20,9 +21,10 @@ from app.auth import (
 from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
-from app.jobs import get_job, start_background_ingest
+from app.jobs import get_job, start_background_ingest, start_background_query
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
+from app.usage import init_usage_db, is_usage_admin, record_login, record_upload, usage_summary
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -72,15 +74,24 @@ class UploadResponse(BaseModel):
     pages_total: int | None = None
 
 
+class QueryJobResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str = "Query started."
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
-    filename: str
+    kind: str = "ingest"
     status: str
-    pages_total: int
-    pages_done: int
-    chunks_indexed: int
-    message: str
+    filename: str = ""
+    pages_total: int = 0
+    pages_done: int = 0
+    chunks_indexed: int = 0
+    message: str = ""
     warnings: list[str] = []
+    elapsed_ms: int | None = None
+    result: QueryResponse | None = None
 
 
 class FilesResponse(BaseModel):
@@ -150,6 +161,7 @@ def _warm_index() -> None:
 async def lifespan(_: FastAPI):
     if not settings.openai_api_key:
         print("Warning: OPENAI_API_KEY not set — get one at platform.openai.com.")
+    init_usage_db()
     # Warm the vector index in a background thread so the first user request
     # doesn't pay the multi-second cold-load cost. Running it off-thread (never
     # inline in lifespan) keeps startup instant so the deploy health check passes.
@@ -161,7 +173,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.7.4",
+    version="0.7.5",
     lifespan=lifespan,
 )
 
@@ -207,6 +219,7 @@ def login(body: LoginRequest) -> LoginResponse:
             detail="This email is not on the access roster. Contact the site administrator.",
         )
     token, expires_at = issue_login_token(email)
+    record_login(email, expires_at)
     return LoginResponse(token=token, email=email, expires_at=expires_at)
 
 
@@ -345,14 +358,25 @@ async def upload_file(
     # event loop (and every other request) for the whole ingest — which, on a
     # cold index, is minutes. run_in_threadpool keeps the server responsive.
     path = await run_in_threadpool(save_upload, content, file.filename)
+    uploader = authenticated_email(request)
 
     extra_meta: dict[str, str] = {"upload_origin": "user"}
     if session_id:
         extra_meta["session_id"] = session_id[:64]
+    if uploader:
+        extra_meta["uploaded_by"] = uploader
 
     use_background, page_count = await run_in_threadpool(pdf_needs_background, path)
     if use_background:
         job = start_background_ingest(path, path.name, page_count, extra_meta=extra_meta or None)
+        record_upload(
+            email=uploader,
+            session_id=session_id,
+            filename=path.name,
+            size_bytes=len(content),
+            status="processing",
+            job_id=job.id,
+        )
         return UploadResponse(
             filename=path.name,
             message=(
@@ -371,6 +395,15 @@ async def upload_file(
     if not result.get("files_processed"):
         raise HTTPException(status_code=422, detail=str(result.get("message")))
 
+    record_upload(
+        email=uploader,
+        session_id=session_id,
+        filename=path.name,
+        size_bytes=len(content),
+        status="complete",
+        chunks_indexed=int(result["chunks_indexed"]),
+    )
+
     return UploadResponse(
         filename=path.name,
         chunks_indexed=int(result["chunks_indexed"]),
@@ -387,8 +420,12 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
+    result = None
+    if job.kind == "query" and job.result:
+        result = QueryResponse(**job.result)
     return JobStatusResponse(
         job_id=job.id,
+        kind=job.kind,
         filename=job.filename,
         status=job.status,
         pages_total=job.pages_total,
@@ -396,23 +433,40 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
         chunks_indexed=job.chunks_indexed,
         message=job.message,
         warnings=job.warnings,
+        elapsed_ms=job.elapsed_ms,
+        result=result,
     )
 
 
-@app.post("/query", response_model=QueryResponse)
-def query(request: Request, body: QueryRequest) -> QueryResponse:
+@app.post("/query", response_model=QueryJobResponse)
+def query(request: Request, body: QueryRequest) -> QueryJobResponse:
     require_api_key(request)
     _require_keys()
-    result = get_rag().query(
-        body.question,
-        top_k=body.top_k,
-        focus_sources=body.focus_sources,
+    email = authenticated_email(request)
+    job = start_background_query(
+        question=body.question,
+        email=email,
         session_id=body.session_id,
-        include_library=body.include_library,
-        explicit_sections=body.section_numbers,
-        history=body.history,
+        query_kwargs={
+            "question": body.question,
+            "top_k": body.top_k,
+            "focus_sources": body.focus_sources,
+            "session_id": body.session_id,
+            "include_library": body.include_library,
+            "explicit_sections": body.section_numbers,
+            "history": body.history,
+        },
     )
-    return QueryResponse(**result)
+    return QueryJobResponse(job_id=job.id, status=job.status)
+
+
+@app.get("/usage/summary")
+def usage_report(request: Request) -> dict:
+    require_api_key(request)
+    email = authenticated_email(request)
+    if not is_usage_admin(email):
+        raise HTTPException(status_code=403, detail="Usage reports are restricted to administrators.")
+    return usage_summary()
 
 
 @app.post("/ingest", response_model=IngestResponse)

@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     auth_secret: str = ""
     auth_token_hours: int = 24  # users must sign in again after this long
 
+    usage_db_path: str = "./data/usage.db"
+    usage_admin_emails: str = "william.a.pratt@usace.army.mil"
+
     chroma_persist_dir: str = "./chroma_db"
     data_dir: str = "./data"
 
@@ -80,6 +83,14 @@ class Settings(BaseSettings):
         return frozenset(
             email.strip().lower()
             for email in self.access_roster.split(",")
+            if email.strip()
+        )
+
+    @property
+    def usage_admin_emails_set(self) -> frozenset[str]:
+        return frozenset(
+            email.strip().lower()
+            for email in self.usage_admin_emails.split(",")
             if email.strip()
         )
 
