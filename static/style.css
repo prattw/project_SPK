@@ -687,6 +687,13 @@ body {
   cursor: not-allowed;
 }
 
+.composer-notice {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text);
+  margin: 0 0 0.5rem;
+}
+
 .composer-hint {
   text-align: center;
   font-size: 0.72rem;
