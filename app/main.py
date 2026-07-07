@@ -24,7 +24,14 @@ from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf
 from app.jobs import get_job, start_background_ingest, start_background_query
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
-from app.usage import init_usage_db, is_usage_admin, record_login, record_upload, usage_summary
+from app.usage import (
+    init_usage_db,
+    is_usage_admin,
+    record_error,
+    record_login,
+    record_upload,
+    usage_summary,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -173,7 +180,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.7.5",
+    version="0.7.6",
     lifespan=lifespan,
 )
 
@@ -214,6 +221,12 @@ def login(body: LoginRequest) -> LoginResponse:
     if not roster_enabled():
         raise HTTPException(status_code=404, detail="Roster sign-in is not enabled.")
     if not email_on_roster(email):
+        record_error(
+            email=email,
+            session_id=None,
+            source="login",
+            message="Sign-in rejected: email not on the access roster.",
+        )
         raise HTTPException(
             status_code=403,
             detail="This email is not on the access roster. Contact the site administrator.",
@@ -335,30 +348,35 @@ async def upload_file(
     require_api_key(request)
     _require_keys()
 
+    uploader = authenticated_email(request)
+
+    def _upload_error(status_code: int, detail: str) -> HTTPException:
+        record_error(
+            email=uploader,
+            session_id=session_id,
+            source="upload",
+            message=detail,
+            detail=file.filename,
+        )
+        return HTTPException(status_code=status_code, detail=detail)
+
     if not file.filename:
-        raise HTTPException(status_code=400, detail="Missing filename.")
+        raise _upload_error(400, "Missing filename.")
 
     suffix = Path(file.filename).suffix.lower()
     if suffix not in INGESTABLE_EXTENSIONS:
         supported = ", ".join(sorted(INGESTABLE_EXTENSIONS))
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported type '{suffix}'. Supported: {supported}",
-        )
+        raise _upload_error(400, f"Unsupported type '{suffix}'. Supported: {supported}")
 
     content = await file.read()
     if len(content) > settings.max_upload_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds {settings.max_upload_mb} MB limit.",
-        )
+        raise _upload_error(413, f"File exceeds {settings.max_upload_mb} MB limit.")
 
     # Offload all blocking disk/CPU/index work to a worker thread. The /upload
     # handler is async, so calling these inline would freeze the single-worker
     # event loop (and every other request) for the whole ingest — which, on a
     # cold index, is minutes. run_in_threadpool keeps the server responsive.
     path = await run_in_threadpool(save_upload, content, file.filename)
-    uploader = authenticated_email(request)
 
     extra_meta: dict[str, str] = {"upload_origin": "user"}
     if session_id:
@@ -393,7 +411,7 @@ async def upload_file(
     )
 
     if not result.get("files_processed"):
-        raise HTTPException(status_code=422, detail=str(result.get("message")))
+        raise _upload_error(422, str(result.get("message")))
 
     record_upload(
         email=uploader,
@@ -458,6 +476,25 @@ def query(request: Request, body: QueryRequest) -> QueryJobResponse:
         },
     )
     return QueryJobResponse(job_id=job.id, status=job.status)
+
+
+class ClientErrorReport(BaseModel):
+    message: str = Field(..., min_length=1, max_length=1000)
+    context: str | None = Field(default=None, max_length=200)
+    session_id: str | None = Field(default=None, max_length=64)
+
+
+@app.post("/log/client-error")
+def log_client_error(request: Request, body: ClientErrorReport) -> dict[str, str]:
+    require_api_key(request)
+    record_error(
+        email=authenticated_email(request),
+        session_id=body.session_id,
+        source="client",
+        message=body.message,
+        detail=body.context,
+    )
+    return {"status": "logged"}
 
 
 @app.get("/usage/summary")

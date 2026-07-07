@@ -386,9 +386,28 @@ function renderMessage(role, text, sources = [], citations = []) {
   chatScroll.scrollTop = chatScroll.scrollHeight;
 }
 
+function reportClientError(message, context) {
+  // Fire-and-forget: usage analytics must never disrupt the user experience.
+  try {
+    const s = currentSession();
+    apiFetch("/log/client-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: String(message).slice(0, 1000),
+        context: context ? String(context).slice(0, 200) : null,
+        session_id: s?.id || null,
+      }),
+    }).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}
+
 function addMessage(role, text, sources = [], citations = []) {
   welcomeEl.hidden = true;
   renderMessage(role, text, sources, citations);
+  if (role === "error") reportClientError(text, "chat");
 
   const s = ensureSession();
   s.messages.push({ role, text, sources, citations });

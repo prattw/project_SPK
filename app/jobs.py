@@ -9,7 +9,7 @@ from typing import Any
 
 from app.ingest import ingest_path
 from app.token_usage import get_tracking, start_tracking
-from app.usage import record_query_finish, record_query_start
+from app.usage import record_error, record_query_finish, record_query_start
 
 _lock = threading.Lock()
 _jobs: dict[str, "Job"] = {}
@@ -137,8 +137,22 @@ def run_ingest_job(
                 finished_at=time.time(),
                 message=str(result.get("message", "Indexing failed.")),
             )
+            _record_ingest_error(job_id, str(result.get("message", "Indexing failed.")))
     except Exception as exc:  # noqa: BLE001 — surface to client
         _update(job_id, status="error", finished_at=time.time(), message=str(exc))
+        _record_ingest_error(job_id, str(exc))
+
+
+def _record_ingest_error(job_id: str, message: str) -> None:
+    job = get_job(job_id)
+    meta = (job.extra_meta or {}) if job else {}
+    record_error(
+        email=meta.get("uploaded_by"),
+        session_id=meta.get("session_id"),
+        source="upload",
+        message=message,
+        detail=job.filename if job else None,
+    )
 
 
 def run_query_job(job_id: str, query_kwargs: dict[str, Any]) -> None:
@@ -166,6 +180,14 @@ def run_query_job(job_id: str, query_kwargs: dict[str, Any]) -> None:
             message=str(exc),
         )
         record_query_finish(job_id=job_id, status="error", tokens=tokens, error=str(exc))
+        job = get_job(job_id)
+        record_error(
+            email=job.query_email if job else None,
+            session_id=job.query_session_id if job else None,
+            source="query",
+            message=str(exc),
+            detail=job.query_question if job else None,
+        )
 
 
 def start_background_ingest(

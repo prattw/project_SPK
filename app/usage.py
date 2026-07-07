@@ -78,9 +78,20 @@ def init_usage_db() -> None:
                     job_id TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS errors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT,
+                    session_id TEXT,
+                    source TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    detail TEXT,
+                    occurred_at REAL NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_logins_email ON logins(email);
                 CREATE INDEX IF NOT EXISTS idx_queries_email ON queries(email);
                 CREATE INDEX IF NOT EXISTS idx_uploads_email ON uploads(email);
+                CREATE INDEX IF NOT EXISTS idx_errors_email ON errors(email);
                 """
             )
             conn.commit()
@@ -202,6 +213,34 @@ def record_upload(
             conn.close()
 
 
+def record_error(
+    *,
+    email: str | None,
+    session_id: str | None,
+    source: str,
+    message: str,
+    detail: str | None = None,
+) -> None:
+    """Log an error a user experienced (login, upload, query, or client-side)."""
+    try:
+        with _lock:
+            conn = _connect()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO errors (email, session_id, source, message, detail, occurred_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (email, session_id, source[:50], message[:1000], (detail or "")[:4000], time.time()),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception:
+        # Error logging must never break the request that triggered it.
+        pass
+
+
 def _email_filter(email: str | None) -> str:
     return (email or "").strip().lower()
 
@@ -269,6 +308,32 @@ def usage_summary() -> dict[str, Any]:
                     """
                 ).fetchall()
             ]
+
+            errors = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT email, session_id, source, message, detail, occurred_at
+                    FROM errors
+                    ORDER BY occurred_at DESC
+                    LIMIT 200
+                    """
+                ).fetchall()
+            ]
+
+            error_counts = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT COALESCE(email, 'unknown') AS email,
+                           source,
+                           COUNT(*) AS error_count
+                    FROM errors
+                    GROUP BY COALESCE(email, 'unknown'), source
+                    ORDER BY error_count DESC
+                    """
+                ).fetchall()
+            ]
         finally:
             conn.close()
 
@@ -277,6 +342,8 @@ def usage_summary() -> dict[str, Any]:
         "logins": logins,
         "uploads": uploads,
         "recent_queries": recent_queries,
+        "errors": errors,
+        "error_counts": error_counts,
     }
 
 
