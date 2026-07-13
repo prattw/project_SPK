@@ -38,7 +38,11 @@ class Settings(BaseSettings):
         "matthew.parks@usace.army.mil,"
         "hans.w.fotta@usace.army.mil,"
         "nicole.a.castle@usace.army.mil,"
-        "angela.c.delwiche@usace.army.mil"
+        "angela.c.delwiche@usace.army.mil,"
+        "suzanne.monk@usace.army.mil,"
+        "shakib.a.waheedi@usace.army.mil,"
+        "anita.y.sie@usace.army.mil,"
+        "robert.m.mctighe@usace.army.mil"
     )
     # Secret for signing login tokens. Set AUTH_SECRET in production so sessions
     # survive restarts; falls back to APP_API_KEY, then an ephemeral boot secret.
