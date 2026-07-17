@@ -137,6 +137,22 @@ def truncate(text: str, max_len: int) -> str:
 
 
 def render(job: dict[str, Any], *, started_at: float, poll_n: int) -> str:
+    if job.get("detail") and not job.get("job_id"):
+        return "\n".join(
+            [
+                "",
+                "  Project SPK — Library ingest",
+                "  " + "─" * 52,
+                "  ✗ Could not load job",
+                f"    {job['detail']}",
+                "",
+                "  If the server restarted (e.g. after a deploy), job progress is",
+                "  cleared from memory. The ingest may have stopped — check Railway",
+                "  logs, then restart with POST /admin/library/ingest if needed.",
+                "",
+            ]
+        )
+
     status = job.get("status") or "unknown"
     total = int(job.get("files_total") or 0)
     done = int(job.get("files_done") or 0)
