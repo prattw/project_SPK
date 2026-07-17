@@ -182,6 +182,11 @@ curl -s "$SPK_URL/jobs/JOB_ID" -H "Authorization: Bearer $SPK_TOKEN"
 Poll every few minutes. Large UFC compilations can take **hours** — that is normal.
 The app stays online; indexing runs in the background on the server.
 
+**Disk space:** Railway’s `/app/data` volume must hold the library PDFs once (not
+twice). If ingest fails with `No space left on device`, increase the volume size
+in Railway (recommend **20 GB+** for ~700 PDFs including UFC splits), then redeploy
+the latest app (moves files instead of copying) and restart ingest.
+
 When `status` is `done`, the documents are **live for all users**.
 
 ### Check the upload queue
