@@ -21,6 +21,8 @@
 #     -d '{"purge_patterns":["UFC"]}'
 #
 # Poll progress (replace JOB_ID):
+#   ./scripts/watch_library_ingest.sh JOB_ID
+# Or raw JSON:
 #   curl -s "$SPK_URL/jobs/JOB_ID" -H "Authorization: Bearer $SPK_TOKEN"
 
 set -euo pipefail

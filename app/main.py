@@ -97,6 +97,7 @@ class JobStatusResponse(BaseModel):
     job_id: str
     kind: str = "ingest"
     status: str
+    phase: str = ""
     filename: str = ""
     pages_total: int = 0
     pages_done: int = 0
@@ -210,7 +211,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.7.7",
+    version="0.7.8",
     lifespan=lifespan,
 )
 
@@ -476,6 +477,7 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
         kind=job.kind,
         filename=job.filename,
         status=job.status,
+        phase=job.phase,
         pages_total=job.pages_total,
         pages_done=job.pages_done,
         chunks_indexed=job.chunks_indexed,
