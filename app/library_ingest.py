@@ -128,16 +128,57 @@ def split_oversized_pdfs(
     return split_count
 
 
-def stage_incoming_to_data(root: Path) -> list[Path]:
-    """Copy incoming files into data/ (flat filenames) so downloads resolve."""
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def cleanup_quarantined_originals(root: Path) -> int:
+    """Remove full PDFs quarantined after split to reclaim disk space."""
+    quarantine = root / "_originals"
+    if not quarantine.is_dir():
+        return 0
+    removed = 0
+    for item in quarantine.iterdir():
+        if item.is_file():
+            item.unlink()
+            removed += 1
+    try:
+        quarantine.rmdir()
+    except OSError:
+        pass
+    return removed
+
+
+def promote_to_data(path: Path, incoming_root: Path) -> Path:
+    """Move a library-incoming file into data/ (one copy on disk).
+
+    If the file was already staged during a prior partial run, drop the
+    duplicate in library-incoming and index from data/.
+    """
     settings.data_path.mkdir(parents=True, exist_ok=True)
-    staged: list[Path] = []
-    for path in discover_documents(root):
-        dest = settings.data_path / path.name
-        if path.resolve() != dest.resolve():
-            shutil.copy2(path, dest)
-        staged.append(dest)
-    return staged
+    dest = settings.data_path / path.name
+    if path.resolve() == dest.resolve():
+        return dest
+
+    if _is_under(path, incoming_root):
+        if dest.exists():
+            path.unlink()
+            return dest
+        shutil.move(str(path), str(dest))
+        return dest
+
+    if not dest.exists():
+        shutil.copy2(path, dest)
+    return dest
+
+
+def stage_incoming_to_data(root: Path) -> list[Path]:
+    """Promote incoming files into data/ without duplicating the full batch."""
+    return [promote_to_data(path, root) for path in discover_documents(root)]
 
 
 def purge_sources_matching(patterns: list[str]) -> int:
@@ -182,17 +223,35 @@ def run_library_ingest(
             threshold=split_threshold,
             progress=progress,
         )
+        quarantined = cleanup_quarantined_originals(root)
+        if quarantined and progress:
+            progress(
+                "split",
+                report.split_pdfs,
+                report.split_pdfs,
+                f"Removed {quarantined} quarantined original(s) to free disk",
+            )
 
     paths = discover_documents(root)
     report.files_found = len(paths)
     if not paths:
         return report
 
-    staged = stage_incoming_to_data(root)
-    total = len(staged)
+    total = len(paths)
 
-    for i, path in enumerate(staged, 1):
-        name = path.name
+    for i, source_path in enumerate(paths, 1):
+        name = source_path.name
+        if progress:
+            progress("ingest", i - 1, total, f"Staging {name}")
+        try:
+            path = promote_to_data(source_path, root)
+        except OSError as exc:
+            report.files_failed += 1
+            report.failed_files.append({"filename": name, "error": str(exc)})
+            if progress:
+                progress("ingest", i, total, f"Failed {name}: {exc}")
+            continue
+
         if progress:
             progress("ingest", i - 1, total, f"Indexing {name}")
 
