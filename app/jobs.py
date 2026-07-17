@@ -31,6 +31,10 @@ class Job:
     chunks_indexed: int = 0
     warnings: list[str] = field(default_factory=list)
     extra_meta: dict[str, str] | None = None
+    # library batch ingest
+    files_total: int = 0
+    files_done: int = 0
+    library_report: dict | None = None
     # query
     result: dict[str, Any] | None = None
     query_email: str | None = None
@@ -200,6 +204,75 @@ def start_background_ingest(
     thread = threading.Thread(
         target=run_ingest_job,
         args=(job.id, path, source_name, extra_meta),
+        daemon=True,
+    )
+    thread.start()
+    return job
+
+
+def create_library_ingest_job() -> Job:
+    job = Job(id=str(uuid.uuid4()), kind="library_ingest")
+    with _lock:
+        _jobs[job.id] = job
+    return job
+
+
+def run_library_ingest_job(
+    job_id: str,
+    *,
+    purge_patterns: list[str] | None = None,
+) -> None:
+    from app.library_ingest import library_incoming_path, run_library_ingest
+
+    def on_progress(phase: str, done: int, total: int, detail: str) -> None:
+        if phase == "ingest":
+            _update(
+                job_id,
+                status="running",
+                files_total=total,
+                files_done=done,
+                filename=detail,
+                message=f"Indexing library files ({done}/{total})…",
+            )
+        else:
+            _update(job_id, status="running", message=detail)
+
+    try:
+        _update(job_id, status="running", started_at=time.time(), message="Preparing library ingest…")
+        report = run_library_ingest(
+            library_incoming_path(),
+            purge_patterns=purge_patterns,
+            progress=on_progress,
+        )
+        data = report.to_dict()
+        status = "error" if report.files_failed else "done"
+        message = (
+            f"Indexed {report.files_indexed} file(s) ({report.chunks_indexed:,} chunks). "
+            f"Failed: {report.files_failed}. Split oversized PDFs: {report.split_pdfs}."
+        )
+        if report.purged_sources:
+            message += f" Purged {report.purged_sources:,} old chunk(s)."
+        _update(
+            job_id,
+            status=status,
+            finished_at=time.time(),
+            files_total=report.files_found,
+            files_done=report.files_indexed + report.files_failed + report.files_skipped,
+            chunks_indexed=report.chunks_indexed,
+            warnings=report.warnings,
+            library_report=data,
+            message=message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _update(job_id, status="error", finished_at=time.time(), message=str(exc))
+
+
+def start_background_library_ingest(*, purge_patterns: list[str] | None = None) -> Job:
+    job = create_library_ingest_job()
+    thread = threading.Thread(
+        target=run_library_ingest_job,
+        args=(job.id,),
+        kwargs={"purge_patterns": purge_patterns},
         daemon=True,
     )
     thread.start()

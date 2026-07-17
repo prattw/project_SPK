@@ -41,6 +41,8 @@ CATEGORY_FOLDERS = {
     "hq-memo": "policy-memos",
     "command-guidance": "policy-memos/command-guidance",
     "acquisition-regulation": "acquisition",
+    "army-regulation": "regulations/AR",
+    "da-pamphlet": "pamphlets/PAM",
     "udg-uai": "udg-uai",
     "idac": "udg-uai/idac",
     "course-material": "course-materials",
@@ -49,6 +51,14 @@ CATEGORY_FOLDERS = {
 
 _SERIES_RE = re.compile(
     r"(?<![A-Za-z])(ER|EM|EP|EC)[ _-]{0,2}(\d{1,4}(?:-\d+){1,4}|\d{2,4})",
+    re.IGNORECASE,
+)
+_AR_RE = re.compile(
+    r"(?<![A-Za-z])AR[ _-]{0,2}(\d{1,4}(?:-\d+){0,4})",
+    re.IGNORECASE,
+)
+_PAM_RE = re.compile(
+    r"(?<![A-Za-z])(?:DA[ _-]{0,2})?PAM[ _-]{0,2}(\d{1,4}(?:-\d+){0,4})",
     re.IGNORECASE,
 )
 _ETL_RE = re.compile(
@@ -302,6 +312,8 @@ def infer_doc_metadata(filename: str) -> dict[str, str]:
     ecb = _ECB_RE.search(stem)
     etl = _ETL_RE.search(stem)
     series = _SERIES_RE.search(stem)
+    ar = _AR_RE.search(stem)
+    pam = _PAM_RE.search(stem)
     om = _OM_RE.match(stem)
     pn = _PN_RE.match(stem)
 
@@ -317,6 +329,14 @@ def infer_doc_metadata(filename: str) -> dict[str, str]:
         doc_type = "Unified Facilities Criteria"
         doc_number = "UFC"
         category = "ufc"
+    elif ar and not upper.startswith("AFARS"):
+        doc_type = "Army Regulation"
+        doc_number = f"AR {ar.group(1)}"
+        category = "army-regulation"
+    elif pam:
+        doc_type = "DA Pamphlet"
+        doc_number = f"PAM {pam.group(1)}"
+        category = "da-pamphlet"
     elif upper.startswith("TSPWG"):
         doc_type = "Tri-Service Pavements Working Group Manual"
         category = "tspwg"

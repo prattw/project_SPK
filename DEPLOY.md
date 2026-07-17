@@ -109,6 +109,75 @@ Large PDFs (2000 pages) need a long ingest. If uploads fail:
 | Auth | Roster sign-in (24 h sessions) | Roster sign-in + `AUTH_SECRET` |
 | Data | `./data`, `./chroma_db` | Mounted volumes |
 
+## 7. Update the Document Library (production)
+
+Use this workflow to add or replace library documents (UFC volumes, ARs, DA PAMs)
+**on the live app** without fixing local Python. Requires deploy of the admin
+library endpoints and your email in `USAGE_ADMIN_EMAILS`.
+
+### One-time setup
+
+1. Set `MAX_UPLOAD_MB` to **500** or higher on Railway if UFC volumes exceed 300 MB.
+2. Merge/deploy the latest code (includes `/admin/library/*` endpoints).
+3. Sign in to the app in your browser.
+
+### Get your session token
+
+In the browser DevTools console on the app page:
+
+```javascript
+localStorage.getItem("spk_token")
+```
+
+Copy the value (without quotes).
+
+### Upload files from your Mac (curl only — no Python)
+
+```bash
+cd "/Users/willpratt/Library/Mobile Documents/com~apple~CloudDocs/Project SPK"
+
+export SPK_URL="https://YOUR-APP.up.railway.app"
+export SPK_TOKEN="paste-token-here"
+
+chmod +x scripts/upload_library_to_production.sh
+
+./scripts/upload_library_to_production.sh "DOCUMENTS for RAG/New UFC docs for upload JUN26"
+./scripts/upload_library_to_production.sh "DOCUMENTS for RAG/ARs"
+./scripts/upload_library_to_production.sh "DOCUMENTS for RAG/DA Pams"
+```
+
+### Start indexing (replaces old UFC in the search index)
+
+```bash
+curl -s -X POST "$SPK_URL/admin/library/ingest" \
+  -H "Authorization: Bearer $SPK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"purge_patterns":["UFC"]}'
+```
+
+This returns a `job_id`. The server will:
+
+1. Remove existing indexed sources whose filenames contain `UFC`
+2. Split any PDF over 1,200 pages into 500-page parts (prevents truncation)
+3. Index every file in `library-incoming` into the production ChromaDB volume
+
+### Monitor progress
+
+```bash
+curl -s "$SPK_URL/jobs/JOB_ID" -H "Authorization: Bearer $SPK_TOKEN"
+```
+
+Poll every few minutes. Large UFC compilations can take **hours** — that is normal.
+The app stays online; indexing runs in the background on the server.
+
+When `status` is `done`, the documents are **live for all users**.
+
+### Check the upload queue
+
+```bash
+curl -s "$SPK_URL/admin/library/incoming" -H "Authorization: Bearer $SPK_TOKEN"
+```
+
 ## Verify deployment
 
 ```bash
