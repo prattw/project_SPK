@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Live terminal progress for a library ingest job on Project SPK.
 
-Uses only the Python standard library (macOS ships with python3).
+Uses only the Python standard library plus curl (built into macOS).
+
+On macOS, Python's built-in HTTPS client often fails certificate verification
+unless you run "Install Certificates.command". This script uses curl instead,
+which matches the rest of the Project SPK admin workflow.
 
 Usage:
   export SPK_URL="https://projectspk-production.up.railway.app"
@@ -17,6 +21,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -24,14 +30,63 @@ import urllib.request
 from typing import Any
 
 
-def fetch_job(base_url: str, token: str, job_id: str) -> dict[str, Any]:
+class FetchError(Exception):
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def fetch_job_curl(base_url: str, token: str, job_id: str) -> dict[str, Any]:
+    url = f"{base_url.rstrip('/')}/jobs/{job_id}"
+    proc = subprocess.run(
+        [
+            "curl",
+            "-sS",
+            "--max-time",
+            "60",
+            "-w",
+            "\n__HTTP_STATUS__:%{http_code}",
+            "-H",
+            f"Authorization: Bearer {token}",
+            "-H",
+            "Accept: application/json",
+            url,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "curl request failed").strip()
+        raise FetchError(detail)
+
+    body, _, status_part = proc.stdout.rpartition("\n__HTTP_STATUS__:")
+    status = int(status_part or "0")
+    body = body.strip()
+    if status >= 400:
+        raise FetchError(f"HTTP {status}: {body}", status=status)
+    return json.loads(body)
+
+
+def fetch_job_urllib(base_url: str, token: str, job_id: str) -> dict[str, Any]:
     url = f"{base_url.rstrip('/')}/jobs/{job_id}"
     req = urllib.request.Request(
         url,
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise FetchError(f"HTTP {exc.code}: {body}", status=exc.code) from exc
+    except urllib.error.URLError as exc:
+        raise FetchError(str(exc.reason)) from exc
+
+
+def fetch_job(base_url: str, token: str, job_id: str) -> dict[str, Any]:
+    if shutil.which("curl"):
+        return fetch_job_curl(base_url, token, job_id)
+    return fetch_job_urllib(base_url, token, job_id)
 
 
 def format_duration(seconds: float) -> str:
@@ -197,14 +252,18 @@ def main() -> int:
             poll_n += 1
             try:
                 job = fetch_job(args.url, args.token, args.job_id)
-            except urllib.error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                clear_and_print(f"\n  HTTP {exc.code}: {body}\n")
-                return 1
-            except urllib.error.URLError as exc:
-                clear_and_print(f"\n  Network error: {exc.reason}\n  Retrying in {args.interval:.0f}s…\n")
+            except FetchError as exc:
+                if exc.status:
+                    clear_and_print(f"\n  HTTP {exc.status}: {exc}\n")
+                    return 1
+                clear_and_print(
+                    f"\n  Network error: {exc}\n  Retrying in {args.interval:.0f}s…\n"
+                )
                 time.sleep(args.interval)
                 continue
+            except json.JSONDecodeError as exc:
+                clear_and_print(f"\n  Invalid JSON from server: {exc}\n")
+                return 1
 
             clear_and_print(render(job, started_at=started_at, poll_n=poll_n))
             if job.get("status") in terminal_status:
