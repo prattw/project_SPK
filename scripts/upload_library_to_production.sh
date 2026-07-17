@@ -39,21 +39,21 @@ if [[ ! -d "$ROOT" ]]; then
   exit 1
 fi
 
-shopt -s nullglob globstar
-files=("$ROOT"/**/*.pdf "$ROOT"/**/*.PDF "$ROOT"/*.pdf "$ROOT"/*.PDF)
-if [[ ${#files[@]} -eq 0 ]]; then
-  echo "No PDF files found under $ROOT" >&2
-  exit 1
-fi
-
-echo "Uploading ${#files[@]} file(s) to $SPK_URL/admin/library/upload ..."
-for f in "${files[@]}"; do
+echo "Uploading PDFs from $ROOT to $SPK_URL/admin/library/upload ..."
+count=0
+while IFS= read -r f; do
+  count=$((count + 1))
   echo "  → $(basename "$f")"
   curl -sf -X POST "$SPK_URL/admin/library/upload" \
     -H "Authorization: Bearer $SPK_TOKEN" \
     -F "file=@${f};filename=$(basename "$f")"
   echo
-done
+done < <(find "$ROOT" -type f \( -iname '*.pdf' \))
+
+if [[ "$count" -eq 0 ]]; then
+  echo "No PDF files found under $ROOT" >&2
+  exit 1
+fi
 
 echo
 echo "Done. Check queue:"
