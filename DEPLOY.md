@@ -163,6 +163,18 @@ This returns a `job_id`. The server will:
 
 ### Monitor progress
 
+Live terminal dashboard (recommended):
+
+```bash
+chmod +x scripts/watch_library_ingest.sh
+./scripts/watch_library_ingest.sh JOB_ID
+```
+
+Refreshes every 10 seconds with a progress bar, current file, elapsed time, and ETA.
+Press Ctrl+C to stop watching — the ingest keeps running on the server.
+
+Raw JSON (one-shot):
+
 ```bash
 curl -s "$SPK_URL/jobs/JOB_ID" -H "Authorization: Bearer $SPK_TOKEN"
 ```

@@ -32,6 +32,7 @@ class Job:
     warnings: list[str] = field(default_factory=list)
     extra_meta: dict[str, str] | None = None
     # library batch ingest
+    phase: str = ""
     files_total: int = 0
     files_done: int = 0
     library_report: dict | None = None
@@ -93,6 +94,15 @@ def create_query_job(
 def get_job(job_id: str) -> Job | None:
     with _lock:
         return _jobs.get(job_id)
+
+
+def list_jobs(*, kind: str | None = None) -> list[Job]:
+    with _lock:
+        jobs = list(_jobs.values())
+    if kind:
+        jobs = [job for job in jobs if job.kind == kind]
+    jobs.sort(key=lambda job: job.created_at, reverse=True)
+    return jobs
 
 
 def _update(job_id: str, **kwargs: Any) -> None:
@@ -229,16 +239,33 @@ def run_library_ingest_job(
             _update(
                 job_id,
                 status="running",
+                phase="ingest",
                 files_total=total,
                 files_done=done,
                 filename=detail,
                 message=f"Indexing library files ({done}/{total})…",
             )
+        elif phase == "split":
+            _update(
+                job_id,
+                status="running",
+                phase="split",
+                files_total=total,
+                files_done=done,
+                filename=detail,
+                message=f"Splitting large PDFs ({done}/{total})…",
+            )
         else:
-            _update(job_id, status="running", message=detail)
+            _update(job_id, status="running", phase=phase, message=detail)
 
     try:
-        _update(job_id, status="running", started_at=time.time(), message="Preparing library ingest…")
+        _update(
+            job_id,
+            status="running",
+            phase="prepare",
+            started_at=time.time(),
+            message="Preparing library ingest…",
+        )
         report = run_library_ingest(
             library_incoming_path(),
             purge_patterns=purge_patterns,
@@ -255,6 +282,7 @@ def run_library_ingest_job(
         _update(
             job_id,
             status=status,
+            phase="done",
             finished_at=time.time(),
             files_total=report.files_found,
             files_done=report.files_indexed + report.files_failed + report.files_skipped,
