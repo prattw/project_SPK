@@ -1,0 +1,46 @@
+# Pulls Friday 5pm Pacific weekly usage from production and stores it as a
+# GitHub Actions artifact. Requires repository secrets:
+#   SPK_URL   — https://projectspk-production.up.railway.app
+#   SPK_TOKEN — admin bearer token, OR use APP_API_KEY if configured for admin
+#
+# Note: the Railway app also auto-snapshots at Friday 5pm PT on its own.
+# This workflow is a backup pull for email/archive outside Railway.
+
+name: Weekly usage report
+
+on:
+  schedule:
+    # Friday 5:00 PM PDT = Saturday 00:00 UTC
+    - cron: "0 0 * * 6"
+    # Friday 5:00 PM PST = Saturday 01:00 UTC
+    - cron: "5 1 * * 6"
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch weekly report
+        env:
+          SPK_URL: ${{ secrets.SPK_URL }}
+          SPK_TOKEN: ${{ secrets.SPK_TOKEN }}
+        run: |
+          if [ -z "$SPK_URL" ] || [ -z "$SPK_TOKEN" ]; then
+            echo "Set repository secrets SPK_URL and SPK_TOKEN" >&2
+            exit 1
+          fi
+          mkdir -p reports
+          WEEK=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+          python3 scripts/weekly_usage_report.py --save --json --out "reports/weekly-${WEEK}.json"
+          python3 scripts/weekly_usage_report.py --out "reports/weekly-${WEEK}.txt"
+          cat "reports/weekly-${WEEK}.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-usage-report
+          path: reports/
+          retention-days: 365

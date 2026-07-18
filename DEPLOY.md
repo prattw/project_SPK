@@ -50,8 +50,8 @@ In Railway → **Variables**, add:
 | `EMBEDDING_PROVIDER` | | `openai` (default) |
 | `MAX_UPLOAD_MB` | | `300` for large PDFs |
 | `CHROMA_PERSIST_DIR` | | `/app/chroma_db` |
-| `USAGE_DB_PATH` | | `/app/data/usage.db` — login/query/upload analytics |
-| `USAGE_ADMIN_EMAILS` | | Comma-separated emails allowed to call `GET /usage/summary` |
+| `USAGE_DB_PATH` | | Leave **blank** (uses `{DATA_DIR}/usage.db`, e.g. `/data/files/usage.db`) so metrics survive redeploys. Do **not** point this at ephemeral container storage. |
+| `USAGE_ADMIN_EMAILS` | | Comma-separated emails allowed to call `/usage/*` |
 
 Generate a strong `AUTH_SECRET` (e.g. `openssl rand -hex 32`). Without it,
 login sessions are invalidated on every restart/redeploy (users just sign in again).
@@ -63,20 +63,37 @@ Sign-in is restricted to the roster of approved `@usace.army.mil` emails
 with their email and get a signed session token that expires after 24 hours,
 after which they must sign in again.
 
-### Usage analytics
+### Usage analytics (retained + Friday report)
 
-The app logs logins, query latency, token usage, and uploads to a SQLite file
-(`USAGE_DB_PATH`, default `./data/usage.db`). Put this on the same persistent
-volume as `/app/data` so records survive redeploys.
+The app logs **logins, queries, tokens, latency, uploads, and errors** to SQLite
+on the data volume (`{DATA_DIR}/usage.db`). Rows are **never deleted**.
 
-Administrators (`USAGE_ADMIN_EMAILS`) can review activity:
+Every **Friday at 5:00 PM Pacific**, the running app automatically writes a
+weekly snapshot to:
+
+- SQLite table `weekly_reports`
+- `{DATA_DIR}/usage-reports/weekly-YYYY-MM-DD.json`
+
+Week window: previous Friday 5:00 PM PT → this Friday 5:00 PM PT.
+
+Administrators (`USAGE_ADMIN_EMAILS`) can pull reports anytime:
 
 ```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" https://YOUR-APP.up.railway.app/usage/summary
+# All-time summary + retention counts
+curl -sS -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/usage/summary"
+
+# Latest completed Friday week (JSON)
+curl -sS -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/usage/weekly"
+
+# Human-readable Friday report
+curl -sS -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/usage/weekly/text"
+
+# Save a snapshot now + pretty terminal report
+python3 scripts/weekly_usage_report.py --save
 ```
 
-Tracked fields include who logged in, per-query prompt-to-answer time, token
-counts (LLM + embeddings), and uploaded file names/sizes.
+Optional backup: GitHub Actions workflow `.github/workflows/weekly-usage-report.yml`
+(set repo secrets `SPK_URL` and `SPK_TOKEN`).
 
 ## 4. Persistent storage (critical)
 

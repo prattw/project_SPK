@@ -49,7 +49,9 @@ class Settings(BaseSettings):
     auth_secret: str = ""
     auth_token_hours: int = 24  # users must sign in again after this long
 
-    usage_db_path: str = "./data/usage.db"
+    # Empty / default → {DATA_DIR}/usage.db so metrics stay on the Railway volume.
+    # Override only if you intentionally use a different persistent path.
+    usage_db_path: str = ""
     usage_admin_emails: str = "william.a.pratt@usace.army.mil"
 
     chroma_persist_dir: str = "./chroma_db"

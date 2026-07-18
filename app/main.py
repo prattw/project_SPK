@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -31,13 +31,19 @@ from app.library_ingest import (
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
 from app.usage import (
+    format_weekly_report_text,
+    get_weekly_snapshot,
     init_usage_db,
     is_usage_admin,
+    list_weekly_snapshots,
     record_error,
     record_login,
     record_upload,
+    save_weekly_snapshot,
     usage_summary,
+    weekly_usage_report,
 )
+from app.usage_scheduler import start_weekly_usage_scheduler
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -200,6 +206,7 @@ async def lifespan(_: FastAPI):
     if not settings.openai_api_key:
         print("Warning: OPENAI_API_KEY not set — get one at platform.openai.com.")
     init_usage_db()
+    start_weekly_usage_scheduler()
     # Warm the vector index in a background thread so the first user request
     # doesn't pay the multi-second cold-load cost. Running it off-thread (never
     # inline in lifespan) keeps startup instant so the deploy health check passes.
@@ -211,7 +218,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.8.0",
+    version="0.8.1",
     lifespan=lifespan,
 )
 
@@ -537,6 +544,60 @@ def usage_report(request: Request) -> dict:
     require_api_key(request)
     _require_usage_admin(request)
     return usage_summary()
+
+
+@app.get("/usage/weekly")
+def usage_weekly(
+    request: Request,
+    week_ending: str | None = None,
+    save: bool = False,
+) -> dict:
+    """Friday-to-Friday Pacific weekly usage report (admin only).
+
+    Defaults to the most recently completed week ending Friday 5:00 PM PT.
+    Pass ``week_ending=YYYY-MM-DD`` to load a saved snapshot for that Friday.
+    Pass ``save=true`` to persist the current week snapshot to the data volume.
+    """
+    require_api_key(request)
+    _require_usage_admin(request)
+
+    if week_ending:
+        saved = get_weekly_snapshot(week_ending)
+        if saved:
+            return saved
+        raise HTTPException(status_code=404, detail=f"No weekly snapshot for {week_ending}.")
+
+    report = weekly_usage_report()
+    if save:
+        report = save_weekly_snapshot(report)
+    return report
+
+
+@app.get("/usage/weekly/text")
+def usage_weekly_text(
+    request: Request,
+    week_ending: str | None = None,
+    save: bool = False,
+) -> PlainTextResponse:
+    """Human-readable Friday weekly report (admin only)."""
+    require_api_key(request)
+    _require_usage_admin(request)
+    if week_ending:
+        report = get_weekly_snapshot(week_ending)
+        if not report:
+            raise HTTPException(status_code=404, detail=f"No weekly snapshot for {week_ending}.")
+    else:
+        report = weekly_usage_report()
+        if save:
+            report = save_weekly_snapshot(report)
+    return PlainTextResponse(format_weekly_report_text(report))
+
+
+@app.get("/usage/weekly/snapshots")
+def usage_weekly_snapshots(request: Request) -> dict:
+    require_api_key(request)
+    _require_usage_admin(request)
+    return {"snapshots": list_weekly_snapshots()}
 
 
 @app.post("/admin/library/upload", response_model=LibraryUploadResponse)
