@@ -786,11 +786,54 @@ async function deleteUpload(source) {
   }
 }
 
+function libraryDocLabel(doc) {
+  return doc.doc_number || doc.display_title || doc.title || doc.source;
+}
+
+function libraryDocSecondary(doc) {
+  const label = libraryDocLabel(doc);
+  if (doc.title && doc.title !== label) return doc.title;
+  const stem = (doc.source || "").replace(/\.[^.]+$/, "");
+  if (stem && stem !== label) return stem.replace(/_/g, " ");
+  return "";
+}
+
+function libraryDocListed(doc, libraryText) {
+  const hay = libraryText.toLowerCase();
+  const checks = [
+    doc.source,
+    doc.doc_number,
+    doc.display_title,
+    doc.title,
+    (doc.source || "").replace(/\.[^.]+$/, ""),
+  ].filter(Boolean);
+  return checks.some((value) => hay.includes(String(value).toLowerCase()));
+}
+
+function renderLibraryItem(doc) {
+  const label = escapeHtml(libraryDocLabel(doc));
+  const href = escapeHtml(withToken(doc.url || "#"));
+  const secondary = libraryDocSecondary(doc);
+  const secondaryHtml = secondary ? `, ${escapeHtml(secondary)}` : "";
+  const date = formatDocDate(doc.updated_at || doc.indexed_at);
+  const dateHtml =
+    date && date !== "—" ? `, published: ${escapeHtml(date)}` : ", published: —";
+  return `<div class="library-item"><a href="${href}"${documentLinkAttrs(doc.url || "")}>${label}</a>${secondaryHtml}<span class="lib-updated">${dateHtml}</span></div>`;
+}
+
 async function refreshLibraryLinks() {
+  const libraryListEl = document.getElementById("libraryList");
+  const recentEl = document.getElementById("libraryRecent");
+  if (!libraryListEl || !recentEl) return;
+
   try {
     const res = await apiFetch("/files");
     const data = await readJsonResponse(res);
-    if (!res.ok || !data.documents?.length) return;
+    if (!res.ok || !data.documents?.length) {
+      recentEl.hidden = true;
+      recentEl.innerHTML = "";
+      return;
+    }
 
     const bySource = new Map(data.documents.map((d) => [d.source, d]));
     const byDocNumber = new Map(
@@ -802,7 +845,7 @@ async function refreshLibraryLinks() {
       const doc = bySource.get(label) || byDocNumber.get(label);
       if (!doc?.url) return;
 
-      link.href = doc.url;
+      link.href = withToken(doc.url);
       if (isLocalDownloadUrl(doc.url)) {
         link.setAttribute("download", "");
         link.removeAttribute("target");
@@ -813,8 +856,30 @@ async function refreshLibraryLinks() {
         link.setAttribute("rel", "noopener");
       }
     });
+
+    const libraryText = libraryListEl.innerHTML;
+    const extras = data.documents
+      .filter((d) => (d.upload_origin || "").toLowerCase() === "library")
+      .filter((d) => !libraryDocListed(d, libraryText))
+      .sort((a, b) => {
+        const ta = Date.parse(a.indexed_at || "") || 0;
+        const tb = Date.parse(b.indexed_at || "") || 0;
+        return tb - ta;
+      });
+
+    if (!extras.length) {
+      recentEl.hidden = true;
+      recentEl.innerHTML = "";
+      return;
+    }
+
+    recentEl.hidden = false;
+    recentEl.innerHTML =
+      `<h3 class="library-recent-title">Recently indexed (searchable)</h3>` +
+      `<div class="library-list library-list-recent">${extras.map(renderLibraryItem).join("")}</div>`;
   } catch {
-    /* non-blocking */
+    recentEl.hidden = true;
+    recentEl.innerHTML = "";
   }
 }
 

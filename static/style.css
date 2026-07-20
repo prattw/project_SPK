@@ -1021,6 +1021,19 @@ body {
 }
 
 /* Document Library — two-column prose list */
+.library-recent {
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.library-recent-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: var(--text);
+}
+
 .library-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
