@@ -50,8 +50,8 @@ In Railway → **Variables**, add:
 | `EMBEDDING_PROVIDER` | | `openai` (default) |
 | `MAX_UPLOAD_MB` | | `300` for large PDFs |
 | `CHROMA_PERSIST_DIR` | | `/app/chroma_db` |
-| `USAGE_DB_PATH` | | Leave **blank** (uses `{DATA_DIR}/usage.db`, e.g. `/data/files/usage.db`) so metrics survive redeploys. Do **not** point this at ephemeral container storage. |
-| `USAGE_ADMIN_EMAILS` | | Comma-separated emails allowed to call `/usage/*` |
+| `USAGE_DB_PATH` | | `/app/data/usage.db` — login/query/upload analytics |
+| `USAGE_ADMIN_EMAILS` | | Comma-separated emails allowed to call `GET /usage/summary` |
 
 Generate a strong `AUTH_SECRET` (e.g. `openssl rand -hex 32`). Without it,
 login sessions are invalidated on every restart/redeploy (users just sign in again).
@@ -63,37 +63,20 @@ Sign-in is restricted to the roster of approved `@usace.army.mil` emails
 with their email and get a signed session token that expires after 24 hours,
 after which they must sign in again.
 
-### Usage analytics (retained + Friday report)
+### Usage analytics
 
-The app logs **logins, queries, tokens, latency, uploads, and errors** to SQLite
-on the data volume (`{DATA_DIR}/usage.db`). Rows are **never deleted**.
+The app logs logins, query latency, token usage, and uploads to a SQLite file
+(`USAGE_DB_PATH`, default `./data/usage.db`). Put this on the same persistent
+volume as `/app/data` so records survive redeploys.
 
-Every **Friday at 5:00 PM Pacific**, the running app automatically writes a
-weekly snapshot to:
-
-- SQLite table `weekly_reports`
-- `{DATA_DIR}/usage-reports/weekly-YYYY-MM-DD.json`
-
-Week window: previous Friday 5:00 PM PT → this Friday 5:00 PM PT.
-
-Administrators (`USAGE_ADMIN_EMAILS`) can pull reports anytime:
+Administrators (`USAGE_ADMIN_EMAILS`) can review activity:
 
 ```bash
-# All-time summary + retention counts
-curl -sS -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/usage/summary"
-
-# Latest completed Friday week (JSON)
-curl -sS -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/usage/weekly"
-
-# Human-readable Friday report
-curl -sS -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/usage/weekly/text"
-
-# Save a snapshot now + pretty terminal report
-python3 scripts/weekly_usage_report.py --save
+curl -H "Authorization: Bearer YOUR_TOKEN" https://YOUR-APP.up.railway.app/usage/summary
 ```
 
-Optional backup: GitHub Actions workflow `.github/workflows/weekly-usage-report.yml`
-(set repo secrets `SPK_URL` and `SPK_TOKEN`).
+Tracked fields include who logged in, per-query prompt-to-answer time, token
+counts (LLM + embeddings), and uploaded file names/sizes.
 
 ## 4. Persistent storage (critical)
 
@@ -125,92 +108,6 @@ Large PDFs (2000 pages) need a long ingest. If uploads fail:
 | URL | http://127.0.0.1:8000 | Public domain |
 | Auth | Roster sign-in (24 h sessions) | Roster sign-in + `AUTH_SECRET` |
 | Data | `./data`, `./chroma_db` | Mounted volumes |
-
-## 7. Update the Document Library (production)
-
-Use this workflow to add or replace library documents (UFC volumes, ARs, DA PAMs)
-**on the live app** without fixing local Python. Requires deploy of the admin
-library endpoints and your email in `USAGE_ADMIN_EMAILS`.
-
-### One-time setup
-
-1. Set `MAX_UPLOAD_MB` to **500** or higher on Railway if UFC volumes exceed 300 MB.
-2. Merge/deploy the latest code (includes `/admin/library/*` endpoints).
-3. Sign in to the app in your browser.
-
-### Get your session token
-
-In the browser DevTools console on the app page:
-
-```javascript
-localStorage.getItem("spk_token")
-```
-
-Copy the value (without quotes).
-
-### Upload files from your Mac (curl only — no Python)
-
-```bash
-cd "/Users/willpratt/Library/Mobile Documents/com~apple~CloudDocs/Project SPK"
-
-export SPK_URL="https://YOUR-APP.up.railway.app"
-export SPK_TOKEN="paste-token-here"
-
-chmod +x scripts/upload_library_to_production.sh
-
-./scripts/upload_library_to_production.sh "DOCUMENTS for RAG/New UFC docs for upload JUN26"
-./scripts/upload_library_to_production.sh "DOCUMENTS for RAG/ARs"
-./scripts/upload_library_to_production.sh "DOCUMENTS for RAG/DA Pams"
-```
-
-### Start indexing (replaces old UFC in the search index)
-
-```bash
-curl -s -X POST "$SPK_URL/admin/library/ingest" \
-  -H "Authorization: Bearer $SPK_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"purge_patterns":["UFC"]}'
-```
-
-This returns a `job_id`. The server will:
-
-1. Remove existing indexed sources whose filenames contain `UFC`
-2. Split any PDF over 1,200 pages into 500-page parts (prevents truncation)
-3. Index every file in `library-incoming` into the production ChromaDB volume
-
-### Monitor progress
-
-Live terminal dashboard (recommended):
-
-```bash
-chmod +x scripts/watch_library_ingest.sh
-./scripts/watch_library_ingest.sh JOB_ID
-```
-
-Refreshes every 10 seconds with a progress bar, current file, elapsed time, and ETA.
-Press Ctrl+C to stop watching — the ingest keeps running on the server.
-
-Raw JSON (one-shot):
-
-```bash
-curl -s "$SPK_URL/jobs/JOB_ID" -H "Authorization: Bearer $SPK_TOKEN"
-```
-
-Poll every few minutes. Large UFC compilations can take **hours** — that is normal.
-The app stays online; indexing runs in the background on the server.
-
-**Disk space:** Railway’s `/app/data` volume must hold the library PDFs once (not
-twice). If ingest fails with `No space left on device`, increase the volume size
-in Railway (recommend **20 GB+** for ~700 PDFs including UFC splits), then redeploy
-the latest app (moves files instead of copying) and restart ingest.
-
-When `status` is `done`, the documents are **live for all users**.
-
-### Check the upload queue
-
-```bash
-curl -s "$SPK_URL/admin/library/incoming" -H "Authorization: Bearer $SPK_TOKEN"
-```
 
 ## Verify deployment
 

@@ -1,12 +1,11 @@
 import threading
-import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -22,28 +21,17 @@ from app.auth import (
 from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
-from app.jobs import get_job, start_background_ingest, start_background_library_ingest, start_background_query
-from app.library_ingest import (
-    extract_incoming_zip,
-    library_incoming_path,
-    save_incoming_upload,
-)
+from app.jobs import get_job, start_background_ingest, start_background_query
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
 from app.usage import (
-    format_weekly_report_text,
-    get_weekly_snapshot,
     init_usage_db,
     is_usage_admin,
-    list_weekly_snapshots,
     record_error,
     record_login,
     record_upload,
-    save_weekly_snapshot,
     usage_summary,
-    weekly_usage_report,
 )
-from app.usage_scheduler import start_weekly_usage_scheduler
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -103,32 +91,14 @@ class JobStatusResponse(BaseModel):
     job_id: str
     kind: str = "ingest"
     status: str
-    phase: str = ""
     filename: str = ""
     pages_total: int = 0
     pages_done: int = 0
     chunks_indexed: int = 0
-    files_total: int = 0
-    files_done: int = 0
     message: str = ""
     warnings: list[str] = []
     elapsed_ms: int | None = None
     result: QueryResponse | None = None
-    library_report: dict | None = None
-
-
-class LibraryIngestRequest(BaseModel):
-    purge_patterns: list[str] | None = Field(
-        default=None,
-        max_length=20,
-        description='Remove existing indexed sources matching these substrings before ingest (e.g. ["UFC"]).',
-    )
-
-
-class LibraryUploadResponse(BaseModel):
-    filename: str
-    message: str
-    incoming_count: int
 
 
 class FilesResponse(BaseModel):
@@ -172,13 +142,6 @@ class HealthResponse(BaseModel):
     embeddings_configured: bool
 
 
-def _require_usage_admin(request: Request) -> str:
-    email = authenticated_email(request)
-    if not is_usage_admin(email):
-        raise HTTPException(status_code=403, detail="Administrator access required.")
-    return email or ""
-
-
 def _require_keys() -> None:
     if not settings.openai_api_key:
         raise HTTPException(
@@ -206,7 +169,6 @@ async def lifespan(_: FastAPI):
     if not settings.openai_api_key:
         print("Warning: OPENAI_API_KEY not set — get one at platform.openai.com.")
     init_usage_db()
-    start_weekly_usage_scheduler()
     # Warm the vector index in a background thread so the first user request
     # doesn't pay the multi-second cold-load cost. Running it off-thread (never
     # inline in lifespan) keeps startup instant so the deploy health check passes.
@@ -218,7 +180,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.8.1",
+    version="0.7.6",
     lifespan=lifespan,
 )
 
@@ -484,17 +446,13 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
         kind=job.kind,
         filename=job.filename,
         status=job.status,
-        phase=job.phase,
         pages_total=job.pages_total,
         pages_done=job.pages_done,
         chunks_indexed=job.chunks_indexed,
-        files_total=job.files_total,
-        files_done=job.files_done,
         message=job.message,
         warnings=job.warnings,
         elapsed_ms=job.elapsed_ms,
         result=result,
-        library_report=job.library_report,
     )
 
 
@@ -542,166 +500,10 @@ def log_client_error(request: Request, body: ClientErrorReport) -> dict[str, str
 @app.get("/usage/summary")
 def usage_report(request: Request) -> dict:
     require_api_key(request)
-    _require_usage_admin(request)
+    email = authenticated_email(request)
+    if not is_usage_admin(email):
+        raise HTTPException(status_code=403, detail="Usage reports are restricted to administrators.")
     return usage_summary()
-
-
-@app.get("/usage/weekly")
-def usage_weekly(
-    request: Request,
-    week_ending: str | None = None,
-    save: bool = False,
-) -> dict:
-    """Friday-to-Friday Pacific weekly usage report (admin only).
-
-    Defaults to the most recently completed week ending Friday 5:00 PM PT.
-    Pass ``week_ending=YYYY-MM-DD`` to load a saved snapshot for that Friday.
-    Pass ``save=true`` to persist the current week snapshot to the data volume.
-    """
-    require_api_key(request)
-    _require_usage_admin(request)
-
-    if week_ending:
-        saved = get_weekly_snapshot(week_ending)
-        if saved:
-            return saved
-        raise HTTPException(status_code=404, detail=f"No weekly snapshot for {week_ending}.")
-
-    report = weekly_usage_report()
-    if save:
-        report = save_weekly_snapshot(report)
-    return report
-
-
-@app.get("/usage/weekly/text")
-def usage_weekly_text(
-    request: Request,
-    week_ending: str | None = None,
-    save: bool = False,
-) -> PlainTextResponse:
-    """Human-readable Friday weekly report (admin only)."""
-    require_api_key(request)
-    _require_usage_admin(request)
-    if week_ending:
-        report = get_weekly_snapshot(week_ending)
-        if not report:
-            raise HTTPException(status_code=404, detail=f"No weekly snapshot for {week_ending}.")
-    else:
-        report = weekly_usage_report()
-        if save:
-            report = save_weekly_snapshot(report)
-    return PlainTextResponse(format_weekly_report_text(report))
-
-
-@app.get("/usage/weekly/snapshots")
-def usage_weekly_snapshots(request: Request) -> dict:
-    require_api_key(request)
-    _require_usage_admin(request)
-    return {"snapshots": list_weekly_snapshots()}
-
-
-@app.post("/admin/library/upload", response_model=LibraryUploadResponse)
-async def admin_library_upload(request: Request, file: UploadFile = File(...)) -> LibraryUploadResponse:
-    """Upload one library document to the production incoming folder (admin only)."""
-    require_api_key(request)
-    _require_usage_admin(request)
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Missing filename.")
-
-    content = await file.read()
-    if len(content) > settings.max_upload_bytes:
-        raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb} MB limit.")
-
-    try:
-        dest = await run_in_threadpool(save_incoming_upload, content, file.filename)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    incoming = library_incoming_path()
-    count = len(list(incoming.glob("*")))
-    return LibraryUploadResponse(
-        filename=dest.name,
-        message=f"Saved to library-incoming. Upload remaining files, then POST /admin/library/ingest.",
-        incoming_count=count,
-    )
-
-
-@app.post("/admin/library/upload-zip", response_model=LibraryUploadResponse)
-async def admin_library_upload_zip(request: Request, file: UploadFile = File(...)) -> LibraryUploadResponse:
-    """Extract supported files from a zip into library-incoming (admin only)."""
-    require_api_key(request)
-    _require_usage_admin(request)
-    if not file.filename or not file.filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Upload a .zip file.")
-
-    content = await file.read()
-    if len(content) > settings.max_upload_bytes:
-        raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb} MB limit.")
-
-    try:
-        names = await run_in_threadpool(extract_incoming_zip, content)
-    except zipfile.BadZipFile as exc:
-        raise HTTPException(status_code=400, detail="Invalid zip file.") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if not names:
-        raise HTTPException(status_code=400, detail="No supported files found in zip.")
-
-    incoming = library_incoming_path()
-    count = len(list(incoming.glob("*")))
-    return LibraryUploadResponse(
-        filename=file.filename,
-        message=f"Extracted {len(names)} file(s) to library-incoming.",
-        incoming_count=count,
-    )
-
-
-@app.post("/admin/library/ingest", response_model=QueryJobResponse)
-def admin_library_ingest(
-    request: Request,
-    body: LibraryIngestRequest | None = Body(default=None),
-) -> QueryJobResponse:
-    """Start background indexing of all files in library-incoming (admin only)."""
-    require_api_key(request)
-    _require_usage_admin(request)
-    _require_keys()
-
-    incoming = library_incoming_path()
-    pending = [p for p in incoming.iterdir() if p.is_file() and not p.name.startswith(".")]
-    if not pending:
-        raise HTTPException(
-            status_code=400,
-            detail="No files in library-incoming. Upload documents first via POST /admin/library/upload.",
-        )
-
-    patterns = body.purge_patterns if body else None
-    job = start_background_library_ingest(purge_patterns=patterns)
-    return QueryJobResponse(
-        job_id=job.id,
-        status=job.status,
-        message=f"Library ingest started for {len(pending)} file(s). Poll GET /jobs/{{job_id}} for progress.",
-    )
-
-
-@app.get("/admin/library/incoming")
-def admin_library_incoming(request: Request) -> dict:
-    """List files waiting in library-incoming (admin only)."""
-    require_api_key(request)
-    _require_usage_admin(request)
-    incoming = library_incoming_path()
-    files = sorted(
-        (
-            {
-                "filename": p.name,
-                "size_bytes": p.stat().st_size,
-            }
-            for p in incoming.iterdir()
-            if p.is_file() and not p.name.startswith(".")
-        ),
-        key=lambda item: item["filename"].lower(),
-    )
-    return {"incoming_count": len(files), "files": files}
 
 
 @app.post("/ingest", response_model=IngestResponse)

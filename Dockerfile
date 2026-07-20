@@ -16,7 +16,6 @@ COPY VERSION ./
 # VERSION bumps invalidate cached COPY layers below
 COPY app ./app
 COPY static ./static
-COPY scripts ./scripts
 COPY data ./data
 
 RUN mkdir -p chroma_db data
