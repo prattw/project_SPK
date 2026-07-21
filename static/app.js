@@ -446,7 +446,11 @@ function hideNotice() {
 
 function showWarnings(warnings, context = "Upload") {
   if (!warnings?.length) return;
-  const text = warnings.join(" ");
+  const text = warnings
+    .map((w) => (typeof w === "string" ? w : formatApiError(w, "")))
+    .filter(Boolean)
+    .join(" ");
+  if (!text) return;
   addMessage("notice", `${context}: ${text}`);
 }
 
@@ -888,7 +892,7 @@ async function refreshUploads() {
     const res = await apiFetch("/files");
     const data = await readJsonResponse(res);
     if (!res.ok) {
-      throw new Error(data.detail || "Could not load uploaded documents.");
+      throw new Error(formatApiError(data.detail, "Could not load uploaded documents."));
     }
     const docs = data.documents?.length
       ? data.documents
@@ -955,7 +959,7 @@ async function pollQueryJob(jobId) {
       return { ok: false, message: err.message || "Could not check query status." };
     }
     if (!res.ok) {
-      return { ok: false, message: job.detail || "Could not check query status." };
+      return { ok: false, message: formatApiError(job.detail, "Could not check query status.") };
     }
     if (job.status === "queued" || job.status === "running") {
       await new Promise((r) => setTimeout(r, interval));
@@ -964,7 +968,7 @@ async function pollQueryJob(jobId) {
     if (job.status === "done" && job.result) {
       return { ok: true, data: job.result, elapsed_ms: job.elapsed_ms };
     }
-    return { ok: false, message: job.message || "Query failed." };
+    return { ok: false, message: formatApiError(job.message, "Query failed.") };
   }
 }
 
@@ -981,7 +985,7 @@ async function pollJob(jobId, filename, pagesTotal, onProgress) {
       return { ok: false, message: err.message || "Could not check indexing status." };
     }
     if (!res.ok) {
-      return { ok: false, message: job.detail || "Could not check indexing status." };
+      return { ok: false, message: formatApiError(job.detail, "Could not check indexing status.") };
     }
     if (job.status === "running" || job.status === "queued") {
       const total = job.pages_total || pagesTotal || 0;
@@ -1024,6 +1028,45 @@ async function readJsonResponse(res) {
   }
 }
 
+/** Normalize FastAPI / app error payloads so the UI never shows "[object Object]". */
+function formatApiError(detail, fallback = "Request failed.") {
+  if (detail == null || detail === "") return fallback;
+  if (typeof detail === "string") return detail;
+  if (typeof detail === "number" || typeof detail === "boolean") return String(detail);
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          if (typeof item.msg === "string") {
+            const loc = Array.isArray(item.loc) ? item.loc.filter((x) => x !== "body").join(".") : "";
+            return loc ? `${loc}: ${item.msg}` : item.msg;
+          }
+          if (typeof item.message === "string") return item.message;
+          if (typeof item.detail === "string") return item.detail;
+        }
+        try {
+          return JSON.stringify(item);
+        } catch {
+          return String(item);
+        }
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join("; ") : fallback;
+  }
+  if (typeof detail === "object") {
+    if (typeof detail.detail === "string") return detail.detail;
+    if (typeof detail.message === "string") return detail.message;
+    if (typeof detail.msg === "string") return detail.msg;
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return fallback;
+    }
+  }
+  return String(detail);
+}
+
 function uploadOne(file, sessionId, onProgress) {
   // XHR (not fetch) so we can report real upload transfer progress.
   return new Promise((resolve, reject) => {
@@ -1049,7 +1092,7 @@ function uploadOne(file, sessionId, onProgress) {
         return;
       }
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-      else reject(new Error(data.detail || "Upload failed."));
+      else reject(new Error(formatApiError(data.detail, "Upload failed.")));
     });
     xhr.addEventListener("error", () => reject(new Error("Network error during upload.")));
     const form = new FormData();
@@ -1222,14 +1265,14 @@ async function askQuestion(question) {
     }
     if (!res.ok) {
       hideWaitingFacts();
-      addMessage("error", data.detail || "Query failed");
+      addMessage("error", formatApiError(data.detail, "Query failed"));
       return;
     }
 
     const result = await pollQueryJob(data.job_id);
     hideWaitingFacts();
     if (!result.ok) {
-      addMessage("error", result.message || "Query failed");
+      addMessage("error", formatApiError(result.message, "Query failed"));
       return;
     }
     addMessage(
@@ -1471,7 +1514,7 @@ loginForm.addEventListener("submit", async (e) => {
     });
     const data = await res.json();
     if (!res.ok) {
-      showLoginError(data.detail || "Sign-in failed. Try again.");
+      showLoginError(formatApiError(data.detail, "Sign-in failed. Try again."));
       loginEmail.focus();
       return;
     }
