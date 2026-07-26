@@ -92,8 +92,19 @@ curl -sS -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/usage/weekly/text"
 python3 scripts/weekly_usage_report.py --save
 ```
 
-Optional backup: GitHub Actions workflow `.github/workflows/weekly-usage-report.yml`
-(set repo secrets `SPK_URL` and `SPK_TOKEN`).
+Optional backup: GitHub Actions workflow `.github/workflows/weekly-usage-report.yml`.
+
+The scheduled job signs in via `POST /login` as a usage-admin roster email
+(default `william.a.pratt@usace.army.mil`) — **no repository secrets required**.
+It uploads the report as a workflow artifact (retained 365 days).
+
+Optional secret overrides: `SPK_URL`, `SPK_LOGIN_EMAIL`, or durable `SPK_TOKEN`
+(`APP_API_KEY`). Manual pull:
+
+```bash
+python3 scripts/weekly_usage_report.py \
+  --login-email william.a.pratt@usace.army.mil --save
+```
 
 ## 4. Persistent storage (critical)
 

@@ -1,10 +1,14 @@
 # Pulls Friday 5pm Pacific weekly usage from production and stores it as a
-# GitHub Actions artifact. Requires repository secrets:
-#   SPK_URL   — https://projectspk-production.up.railway.app
-#   SPK_TOKEN — admin bearer token, OR use APP_API_KEY if configured for admin
+# GitHub Actions artifact.
+#
+# Auth: signs in via POST /login with a usage-admin roster email — no repo
+# secrets required (same model as the public web login). Optional overrides:
+#   SPK_URL          — defaults to production Railway URL
+#   SPK_LOGIN_EMAIL  — defaults to william.a.pratt@usace.army.mil
+#   SPK_TOKEN        — if set, used instead of login (e.g. durable APP_API_KEY)
 #
 # Note: the Railway app also auto-snapshots at Friday 5pm PT on its own.
-# This workflow is a backup pull for email/archive outside Railway.
+# This workflow is a backup pull for archive outside Railway.
 
 name: Weekly usage report
 
@@ -27,16 +31,32 @@ jobs:
         env:
           SPK_URL: ${{ secrets.SPK_URL }}
           SPK_TOKEN: ${{ secrets.SPK_TOKEN }}
+          SPK_LOGIN_EMAIL: ${{ secrets.SPK_LOGIN_EMAIL }}
         run: |
-          if [ -z "$SPK_URL" ] || [ -z "$SPK_TOKEN" ]; then
-            echo "Set repository secrets SPK_URL and SPK_TOKEN" >&2
-            exit 1
+          set -euo pipefail
+          export SPK_URL="${SPK_URL:-https://projectspk-production.up.railway.app}"
+          LOGIN_EMAIL="${SPK_LOGIN_EMAIL:-william.a.pratt@usace.army.mil}"
+
+          AUTH_ARGS=()
+          if [ -n "${SPK_TOKEN:-}" ]; then
+            echo "Using SPK_TOKEN secret"
+          else
+            echo "Signing in as ${LOGIN_EMAIL}"
+            AUTH_ARGS=(--login-email "$LOGIN_EMAIL")
           fi
+
           mkdir -p reports
           WEEK=$(TZ=America/Los_Angeles date +%Y-%m-%d)
-          python3 scripts/weekly_usage_report.py --save --json --out "reports/weekly-${WEEK}.json"
-          python3 scripts/weekly_usage_report.py --out "reports/weekly-${WEEK}.txt"
+          python3 scripts/weekly_usage_report.py "${AUTH_ARGS[@]}" --save --json --out "reports/weekly-${WEEK}.json"
+          python3 scripts/weekly_usage_report.py "${AUTH_ARGS[@]}" --out "reports/weekly-${WEEK}.txt"
           cat "reports/weekly-${WEEK}.txt"
+          {
+            echo "## Weekly usage report"
+            echo ""
+            echo '```'
+            cat "reports/weekly-${WEEK}.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

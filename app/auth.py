@@ -109,6 +109,12 @@ def authenticated_email(request: Request) -> str | None:
     return verify_login_token(provided)
 
 
+def has_app_api_key(request: Request) -> bool:
+    """True when the request presents the durable APP_API_KEY credential."""
+    provided = _extract_credential(request)
+    return bool(settings.app_api_key and provided and provided == settings.app_api_key)
+
+
 def require_api_key(request: Request) -> None:
     if not auth_required():
         return
