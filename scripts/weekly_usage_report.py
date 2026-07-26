@@ -3,7 +3,8 @@
 
 Usage:
   export SPK_URL="https://projectspk-production.up.railway.app"
-  export SPK_TOKEN="your-admin-bearer-token"
+  # Prefer durable APP_API_KEY (Railway). Login session tokens expire in 24h.
+  export SPK_TOKEN="your-app-api-key"
 
   # Latest completed week (previous Friday 5pm → this Friday 5pm PT)
   python3 scripts/weekly_usage_report.py

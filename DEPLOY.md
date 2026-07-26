@@ -92,8 +92,17 @@ curl -sS -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/usage/weekly/text"
 python3 scripts/weekly_usage_report.py --save
 ```
 
-Optional backup: GitHub Actions workflow `.github/workflows/weekly-usage-report.yml`
-(set repo secrets `SPK_URL` and `SPK_TOKEN`).
+Optional backup: GitHub Actions workflow `.github/workflows/weekly-usage-report.yml`.
+
+To enable the backup (otherwise the scheduled job skips with a warning):
+
+1. Set a durable `APP_API_KEY` in Railway Variables (long random string — not a login session).
+2. GitHub → **Settings → Secrets and variables → Actions** → add:
+   - `SPK_URL` = `https://projectspk-production.up.railway.app`
+   - `SPK_TOKEN` = the same `APP_API_KEY` value
+3. **Actions → Weekly usage report → Run workflow** to pull the latest week now.
+
+Do not paste a browser login token into `SPK_TOKEN` — those expire in 24 hours.
 
 ## 4. Persistent storage (critical)
 

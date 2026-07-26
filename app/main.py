@@ -15,6 +15,7 @@ from app.auth import (
     auth_required,
     authenticated_email,
     email_on_roster,
+    has_app_api_key,
     issue_login_token,
     require_api_key,
     roster_enabled,
@@ -173,6 +174,10 @@ class HealthResponse(BaseModel):
 
 
 def _require_usage_admin(request: Request) -> str:
+    # Durable machine credential for GitHub Actions / CLI automation.
+    # Login session tokens expire in AUTH_TOKEN_HOURS and cannot be scheduled weekly.
+    if has_app_api_key(request):
+        return "app-api-key"
     email = authenticated_email(request)
     if not is_usage_admin(email):
         raise HTTPException(status_code=403, detail="Administrator access required.")

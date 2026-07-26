@@ -1,10 +1,12 @@
 # Pulls Friday 5pm Pacific weekly usage from production and stores it as a
 # GitHub Actions artifact. Requires repository secrets:
 #   SPK_URL   — https://projectspk-production.up.railway.app
-#   SPK_TOKEN — admin bearer token, OR use APP_API_KEY if configured for admin
+#   SPK_TOKEN — durable APP_API_KEY from Railway (NOT a 24h login session token)
 #
 # Note: the Railway app also auto-snapshots at Friday 5pm PT on its own.
 # This workflow is a backup pull for email/archive outside Railway.
+# When secrets are unset, the job skips (does not fail) so optional backup
+# setup does not spam failure notifications.
 
 name: Weekly usage report
 
@@ -29,16 +31,41 @@ jobs:
           SPK_TOKEN: ${{ secrets.SPK_TOKEN }}
         run: |
           if [ -z "$SPK_URL" ] || [ -z "$SPK_TOKEN" ]; then
-            echo "Set repository secrets SPK_URL and SPK_TOKEN" >&2
-            exit 1
+            {
+              echo "## Weekly usage report skipped"
+              echo ""
+              echo "Repository secrets \`SPK_URL\` and/or \`SPK_TOKEN\` are not set."
+              echo ""
+              echo "This GitHub Action is an **optional backup**. The Railway app still"
+              echo "auto-snapshots at Friday 5:00 PM Pacific to the data volume."
+              echo ""
+              echo "To enable this backup:"
+              echo "1. In Railway, set a durable \`APP_API_KEY\` (long random string)."
+              echo "2. In GitHub → Settings → Secrets and variables → Actions, add:"
+              echo "   - \`SPK_URL\` = \`https://projectspk-production.up.railway.app\`"
+              echo "   - \`SPK_TOKEN\` = the same \`APP_API_KEY\` value"
+              echo "3. Re-run this workflow (Actions → Weekly usage report → Run workflow)."
+              echo ""
+              echo "Do **not** paste a browser login token — those expire in 24 hours."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::warning::SPK_URL/SPK_TOKEN secrets not configured; skipping optional backup pull."
+            exit 0
           fi
           mkdir -p reports
           WEEK=$(TZ=America/Los_Angeles date +%Y-%m-%d)
           python3 scripts/weekly_usage_report.py --save --json --out "reports/weekly-${WEEK}.json"
           python3 scripts/weekly_usage_report.py --out "reports/weekly-${WEEK}.txt"
           cat "reports/weekly-${WEEK}.txt"
+          {
+            echo "## Weekly usage report"
+            echo ""
+            echo '```'
+            cat "reports/weekly-${WEEK}.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact
+        if: hashFiles('reports/*') != ''
         uses: actions/upload-artifact@v4
         with:
           name: weekly-usage-report
