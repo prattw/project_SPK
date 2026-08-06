@@ -55,6 +55,13 @@ Open **http://localhost:8000** — upload files and chat.
 
 See **[DEPLOY.md](DEPLOY.md)** for a full Railway guide (volumes, env vars, public URL).
 
+## Deploy offline (austere / no-internet field kit)
+
+See **[DEPLOY_OFFLINE.md](DEPLOY_OFFLINE.md)** for running Project SPK entirely offline on a
+standalone laptop (local Ollama model instead of the OpenAI API) — for deployment to
+environments with no internet access. This is a separate `austere-offline` branch/effort,
+independent of the Azure Government/CUI work.
+
 Quick checklist:
 
 1. Push to GitHub
