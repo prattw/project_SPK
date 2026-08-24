@@ -23,18 +23,19 @@ servers. No app code changes — just a different `.env`.
 
 ## What you get vs. what you're prototyping
 
-| | This laptop prototype | Eventual RTX 5090 / PRO 6000 box |
-|---|---|---|
-| Model size | 3B–14B (RAM/GPU-dependent) | 14B–70B+ class |
-| Context budget | Kept modest (`MAX_CONTEXT_CHARS=40000`) | Expanded (60k–100k+ tokens) as planned |
-| Speed | Likely slow, especially on CPU-only | Fast — that's the whole point of the GPU purchase |
-| Purpose | Learn the setup, test prompts/retrieval tuning, validate the Ollama swap works | Production-grade self-hosted serving for the team |
+| | Laptop, CPU-only | Laptop with a small GPU (e.g. 8GB RTX 5050/4060) | Eventual RTX 5090 / PRO 6000 box |
+|---|---|---|---|
+| Model size | 3B | 7B–8B, fully in VRAM | 14B–70B+ class |
+| Context budget | Kept modest (`MAX_CONTEXT_CHARS=40000`) | Modest, but the model itself answers faster | Expanded (60k–100k+ tokens) as planned |
+| Speed | Slow | Meaningfully faster — real CUDA acceleration, same code path as the production box | Fast — that's the whole point of the GPU purchase |
+| Purpose | De-risk the software setup | De-risk the setup *and* get a legitimate (if small-scale) preview of GPU-accelerated serving | Production-grade self-hosted serving for the team |
 
-Treat this as a rehearsal, not a preview of final quality or speed. A
-laptop CPU (or a small laptop GPU, if your ThinkPad has a discrete NVIDIA
-card) is not the hardware that was sized for your actual requirements —
-the point of this exercise is to de-risk the *software* setup (Ollama,
-env vars, re-indexing, prompt behavior) before spending money on hardware.
+If your laptop has a discrete NVIDIA GPU, this stops being a pure software
+rehearsal — Ollama running through CUDA on that GPU is the same mechanism
+the 5090/PRO 6000 box will use, just with far less VRAM (8GB vs. 32–96GB).
+That means smaller models and a smaller context window, but the *speed
+character* (fast decode, prefill still the main wait) will feel closer to
+the real thing than CPU-only inference ever would.
 
 ## One-time setup
 
@@ -55,9 +56,70 @@ Force a specific model instead of auto-detection:
 ./scripts/setup_local_prototype.sh --model qwen2.5:14b-instruct
 ```
 
-Running Windows instead of Linux on the laptop? Do this inside **WSL2**
-(Ubuntu) — install WSL2, open an Ubuntu terminal, and run the same script
-there. Ollama's Linux install works unmodified inside WSL2.
+### Running Windows instead of Linux? Use WSL2
+
+Do all of this inside **WSL2** (Ubuntu) — Ollama's Linux install works
+unmodified there, and if your laptop has a discrete NVIDIA GPU, WSL2 passes
+it through so Ollama gets real CUDA acceleration, not just CPU.
+
+**1. Install WSL2 with Ubuntu** (from an elevated PowerShell):
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Reboot if prompted, then open the "Ubuntu" app from the Start menu and
+finish the first-run username/password setup.
+
+**2. If you have a discrete NVIDIA GPU, verify passthrough works.** You do
+**not** install a separate Linux NVIDIA driver inside WSL2 — the Windows
+driver handles it. Just confirm it's visible from inside Ubuntu:
+
+```bash
+nvidia-smi
+```
+
+If that shows your GPU and its VRAM, you're set. If it's not found, update
+to the latest NVIDIA driver on the **Windows** side (Game Ready or Studio
+driver, whichever you already use) and try again — recent drivers on
+Windows 11 support this automatically.
+
+**3. Give WSL2 enough memory.** By default WSL2 caps itself at a fraction
+of your system RAM, which can starve a 7B+ model. Create/edit
+`C:\Users\<you>\.wslconfig` (in Windows, not inside Ubuntu):
+
+```ini
+[wsl2]
+memory=24GB
+processors=12
+```
+
+Then from PowerShell: `wsl --shutdown`, and reopen the Ubuntu app.
+
+**4. Get the code and run setup, inside Ubuntu:**
+
+```bash
+git clone https://github.com/prattw/project_SPK.git
+cd project_SPK
+git checkout cursor/laptop-local-prototype-a548   # this branch, until merged
+./scripts/setup_local_prototype.sh
+```
+
+The script's GPU-detection will pick a 7-8B model automatically if it sees
+an 8GB-class laptop GPU (e.g. an RTX 5050/4060) — that's the sweet spot: it
+fits fully in VRAM with room for a modest context window, rather than
+spilling to slow CPU offload the way a 14B model would on 8GB.
+
+**5. Run the app** and open it from your normal Windows browser — WSL2
+forwards `localhost` automatically:
+
+```bash
+source .venv/bin/activate
+./start.sh
+```
+
+Then browse to `http://127.0.0.1:8000` from Windows, same as if it were
+running natively.
 
 ## Running it
 

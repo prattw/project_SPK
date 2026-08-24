@@ -47,10 +47,20 @@ else
 fi
 
 # --- Pick a model tier ---
+# GPU VRAM takes priority over system RAM when a discrete NVIDIA GPU is
+# present: a model that overflows VRAM falls back to slow CPU offload, which
+# defeats the point of having a GPU at all. An 8GB card (e.g. a laptop RTX
+# 5050/4060) fits a 7-8B model at Q4 with headroom for context; it does NOT
+# comfortably fit a 14B model, even though 32GB of system RAM alone would
+# otherwise qualify for that tier below.
 if [[ -n "$FORCE_MODEL" ]]; then
   CHAT_MODEL="$FORCE_MODEL"
+elif (( GPU_VRAM_GB >= 20 )); then
+  CHAT_MODEL="qwen2.5:14b-instruct"
 elif (( GPU_VRAM_GB >= 12 )); then
   CHAT_MODEL="qwen2.5:14b-instruct"
+elif (( GPU_VRAM_GB >= 6 )); then
+  CHAT_MODEL="qwen2.5:7b-instruct"
 elif (( TOTAL_RAM_GB >= 32 )); then
   CHAT_MODEL="qwen2.5:14b-instruct"
 elif (( TOTAL_RAM_GB >= 16 )); then
