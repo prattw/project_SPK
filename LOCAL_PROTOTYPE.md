@@ -129,6 +129,55 @@ source .venv/bin/activate
 # open http://127.0.0.1:8000
 ```
 
+## Desktop icon / app-like window (Windows)
+
+Once you've confirmed the app runs via `./start.sh` at least once (above),
+you can set up a normal-looking desktop icon so you don't have to open a
+terminal every time. This is entirely on the Windows side — it starts the
+WSL2 backend for you in the background and opens the app in a chromeless
+browser window (no address bar or tabs), so it looks and feels like a
+standalone app rather than a browser tab.
+
+Files live in `scripts/windows/` in this repo:
+
+| File | Purpose |
+|---|---|
+| `app-icon.ico` | The icon used for the shortcut |
+| `Start-ProjectSPK.ps1` | Starts the backend in WSL2 if needed, opens the app window |
+| `Stop-ProjectSPK.ps1` | Stops the backend inside WSL2 |
+| `Install-ProjectSPKShortcut.ps1` | One-time installer — creates the Desktop/Start Menu icon |
+
+**Install (run once):** open the repo folder in File Explorer — from the
+address bar, go to `\\wsl.localhost\Ubuntu\home\<you>\project_SPK\scripts\windows`
+(swap `<you>` for your WSL username) — then open a PowerShell window there
+(Shift+Right-click the folder background → "Open PowerShell window here")
+and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-ProjectSPKShortcut.ps1
+```
+
+This copies the launcher and icon to `%LOCALAPPDATA%\ProjectSPK` (so the
+shortcut doesn't depend on the WSL2 network path staying mounted) and
+creates a **"Project SPK"** icon on your Desktop and in the Start Menu.
+Windows always opens `.ps1` files in Notepad by default when
+double-clicked — that's expected; running it via the command above is the
+one-time exception, and it only affects this script's process, not your
+system's execution policy.
+
+**Use it:** double-click the "Project SPK" icon. First launch takes a few
+seconds while the backend starts inside WSL2 (subsequent launches are
+faster if it's already running). To pin it to the taskbar, right-click the
+Desktop icon and choose **Pin to taskbar**.
+
+**Stop it:** run `Stop-ProjectSPK.ps1` from `%LOCALAPPDATA%\ProjectSPK`, or
+just `wsl --shutdown` from PowerShell to stop everything running in WSL2.
+
+This is purely a Windows-side convenience layer — it doesn't change
+anything about the app itself, and macOS/Linux versions of "double-click
+to launch" would use the equivalent native mechanism (an `.app` bundle or
+a `.desktop` file) if you ever need one.
+
 ## Important: separate data, separate index
 
 `.env.local.example` points `CHROMA_PERSIST_DIR` at `chroma_db_local/` and
