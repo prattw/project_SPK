@@ -7,6 +7,22 @@ run-up to buying an RTX 5090 or RTX PRO 6000 Blackwell workstation. This is
 OpenAI API exactly as it does today. This is a second, independent copy of
 the app that only you run, only on your laptop.
 
+This laptop copy is meant to work like a standalone desktop app — closer to
+Word than to a hosted web service:
+
+- **Everything runs locally.** No OpenAI API call is ever made — chat,
+  embeddings, and vision/OCR all go to a model running on this laptop via
+  Ollama. See "Working fully offline" below for exactly what that does and
+  doesn't require internet for.
+- **The model is swappable.** Change it any time with one command — see
+  "Swapping the model" below — without touching any app code.
+- **It has a desktop icon** (see the section further down) so it opens like
+  a normal app, not a terminal + browser tab.
+- **It can run an experimental agent mode** that lets the model search the
+  library, read a document, and draft a report on its own — a first
+  prototype of the "agents on government terminals" feature planned for the
+  hosted app. See "Agent mode" below.
+
 ## Why this works with (almost) no code changes
 
 `app/config.py` already exposes `OPENAI_BASE_URL`, and both `app/llm.py`
@@ -129,6 +145,73 @@ source .venv/bin/activate
 # open http://127.0.0.1:8000
 ```
 
+## Swapping the model
+
+The model is intentionally not hardcoded anywhere in the app — `app/llm.py`
+and `app/embeddings.py` just read whatever `OPENAI_MODEL` (and
+`OPENAI_EMBEDDING_MODEL`) says in `.env`. To try a different chat model:
+
+```bash
+./scripts/switch_local_model.sh qwen2.5:14b-instruct
+```
+
+This pulls the model with Ollama if it isn't local yet, and updates
+`OPENAI_MODEL` in `.env` for you. Restart the app (`./start.sh`) afterward.
+Pick a size that fits your laptop's RAM/VRAM — see the sizing table above.
+
+A couple of things to know when swapping:
+
+- **Embedding model swaps are riskier.** Changing `OPENAI_EMBEDDING_MODEL`
+  after documents are already indexed makes the existing vectors in
+  `chroma_db_local/` incompatible with new queries (different model, different
+  vector space). If you change the embedding model, delete `chroma_db_local/`
+  and re-ingest.
+- **Agent mode needs a tool-calling model.** If you turn on Agent mode (next
+  section), the model must support OpenAI-style tool/function calling.
+  Qwen2.5, Llama 3.1+, and Mistral-Nemo all do; check
+  [ollama.com/search?c=tools](https://ollama.com/search?c=tools) for the
+  current list before switching.
+
+## Agent mode (experimental, tool-calling)
+
+`.env.local.example` sets `ENABLE_AGENT_MODE=true` on this laptop prototype
+only — production on Railway has this off (`ENABLE_AGENT_MODE` defaults to
+`false`) and doesn't show any of this. It's a first, deliberately small
+prototype of the "agents on government terminals" idea for the hosted app:
+instead of one retrieval pass + one answer, the model can take a few steps
+on its own before responding.
+
+When it's on, an **"Agent mode"** checkbox appears above the chat box. With
+it checked, the model can call these tools, entirely against your local
+index — no network calls, no code execution, no arbitrary file access:
+
+| Tool | What it does |
+|---|---|
+| `search_documents` | Semantic search over the local library (same retrieval the normal chat uses) |
+| `list_documents` | Lists every indexed document's filename, doc number, title, category |
+| `read_document` | Reads one specific document's indexed text in page order (for "summarize this file") |
+| `draft_docx_report` | Writes a Word document to `data_local/_agent_output/` on this laptop |
+
+The chat reply shows a collapsible **"Agent steps"** trace above the answer
+so you can see exactly which tools it called and in what order — useful
+both for trust (did it actually check the documents?) and for debugging a
+model that isn't calling tools the way you'd expect.
+
+Known limitations of this first pass:
+
+- **Smaller/CPU-tier models are unreliable at tool calling.** A 3B model
+  will often ignore the tools entirely or produce malformed calls. This
+  works best on the 7B+ tier models the setup script picks for 16GB+ RAM or
+  an 8GB+ GPU.
+- **It's capped at a few steps per turn** (`AGENT_MAX_STEPS=6` in `.env`) so
+  a confused model can't loop forever — if it runs out of steps, it's asked
+  once more, without tools, to just answer with whatever it's found so far.
+- **This is a prototype, not the government-terminal agent feature itself.**
+  It has no access to anything outside this app's own document index and
+  output folder — no shell, no arbitrary filesystem, no other applications.
+  Treat it as a testbed for what a tool-using model on local hardware can
+  and can't do reliably, ahead of designing the real feature.
+
 ## Desktop icon / app-like window (Windows)
 
 Once you've confirmed the app runs via `./start.sh` at least once (above),
@@ -248,12 +331,47 @@ Your uploaded/ingested documents now live in `chroma_db_local/` and
 `data_local/` on this laptop only — see the embedding-incompatibility note
 above for why this can never be merged with production's index.
 
+## Working fully offline
+
+Once setup is done, day-to-day use needs **no internet at all** — chat,
+uploads/ingest, the document library, and Agent mode all run against
+services on `127.0.0.1` (the app, Ollama, and the local Chroma index).
+Nothing about answering a question or drafting a report calls out anywhere.
+
+What still needs internet, and only ever once:
+
+- **Initial setup** (`./scripts/setup_local_prototype.sh`) — installing
+  WSL2/Ubuntu, installing Ollama, and `ollama pull`-ing the models. After
+  that, the models live on disk under Ollama's local model store.
+- **Switching to a new model** (`./scripts/switch_local_model.sh`) — same
+  reason, it's a one-time download of that model.
+- **Installing the desktop shortcut** the first time — copying files
+  locally, no network involved, but if you haven't cloned the repo yet
+  that step obviously needs it.
+
+A couple of optional features in the UI *do* reach out to the internet if
+you use them, and will just fail harmlessly (an error message, nothing
+crashes) if you click them with no connection:
+
+- The **"Sync Publications"** button checks USACE/federal publication
+  websites for newly listed documents — not needed for chat or search to
+  work, only for that specific update-check feature.
+- Links in the **Document Library** tab that point to
+  `publications.usace.army.mil` or `usace.army.mil` open the public USACE
+  site in a browser tab — informational only, not something the app itself
+  depends on.
+
+Everything else — including the desktop icon launch, WSL2 backend startup,
+and the chromeless app window — works completely offline, the same way a
+locally installed desktop application does. This is the same self-hosted
+pattern a separate effort (the `austere-offline` branch) built for a
+different laptop aimed at field/no-internet deployment; that branch is
+about packaging a *standalone kit* for someone else to carry, while this
+one is about your own development/testing laptop, but the underlying
+"local Ollama model instead of OpenAI" mechanism is identical.
+
 ## What this does *not* cover
 
-- **Offline/no-internet field use.** A different effort
-  (`austere-offline` branch) targets that specific scenario for a
-  standalone deployment laptop; this prototype assumes you have normal
-  internet access, it's just not calling OpenAI for inference.
 - **Vision OCR for scanned pages.** Works the same way (routes through the
   same `OPENAI_MODEL`), but a small local model doing OCR/vision on a
   laptop CPU will be slow and lower quality than GPT-4o-mini. Fine for

@@ -129,7 +129,9 @@ cat <<EOF
 == Setup complete ==
 
 This laptop now has its own local Project SPK prototype, fully separate
-from production (Railway + OpenAI, unaffected by any of this).
+from production (Railway + OpenAI, unaffected by any of this). Everything
+runs against the local $CHAT_MODEL model — no OpenAI API, no internet
+required once models are pulled.
 
 Next steps:
   1. source .venv/bin/activate
@@ -143,4 +145,11 @@ Notes:
   - If answers feel slow or shallow, that's expected on laptop hardware —
     see LOCAL_PROTOTYPE.md for what to expect and how this maps to the
     RTX 5090 / PRO 6000 box you're planning to buy.
+  - Agent mode is on by default (ENABLE_AGENT_MODE=true in .env) — an "Agent
+    mode" checkbox will appear above the chat box, letting the model search
+    the library, read a document, and draft a report on its own. See
+    LOCAL_PROTOTYPE.md for what it can and can't do yet.
+  - To try a different model later: ./scripts/switch_local_model.sh <tag>
+  - To run fully offline (no internet at all), see the "Working offline"
+    section in LOCAL_PROTOTYPE.md.
 EOF
