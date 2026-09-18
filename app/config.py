@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     min_library_chunks_in_context: int = 12
     library_subquery_slots: int = 8
 
+    # Agent mode (tool-calling) — off by default everywhere, including
+    # production. Enabled explicitly on the local prototype's .env to
+    # experiment with a local model that can search the index, read a
+    # document, and draft a docx report, ahead of a future "agents on
+    # government terminals" feature for the hosted app. Requires a chat
+    # model that supports OpenAI-style tool calling (most modern Ollama
+    # models do; see LOCAL_PROTOTYPE.md).
+    enable_agent_mode: bool = False
+    agent_max_steps: int = 6
+
     @property
     def roster_emails(self) -> frozenset[str]:
         return frozenset(

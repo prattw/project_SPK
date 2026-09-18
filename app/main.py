@@ -2,6 +2,7 @@ import threading
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -23,7 +24,13 @@ from app.auth import (
 from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
-from app.jobs import get_job, start_background_ingest, start_background_library_ingest, start_background_query
+from app.jobs import (
+    get_job,
+    start_background_agent,
+    start_background_ingest,
+    start_background_library_ingest,
+    start_background_query,
+)
 from app.library_ingest import (
     extract_incoming_zip,
     library_incoming_path,
@@ -100,6 +107,26 @@ class QueryJobResponse(BaseModel):
     message: str = "Query started."
 
 
+class AgentStep(BaseModel):
+    tool: str
+    args: dict[str, Any] = {}
+    elapsed_ms: int = 0
+    ok: bool = True
+    summary: str = ""
+
+
+class AgentResponse(BaseModel):
+    answer: str
+    sources: list[str] = []
+    steps: list[AgentStep] = []
+
+
+class AgentRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=4000)
+    session_id: str | None = Field(default=None, max_length=64)
+    history: list[dict[str, str]] | None = Field(default=None, max_length=20)
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     kind: str = "ingest"
@@ -116,6 +143,8 @@ class JobStatusResponse(BaseModel):
     elapsed_ms: int | None = None
     result: QueryResponse | None = None
     library_report: dict | None = None
+    agent_steps: list[AgentStep] = []
+    agent_result: AgentResponse | None = None
 
 
 class LibraryIngestRequest(BaseModel):
@@ -171,6 +200,7 @@ class HealthResponse(BaseModel):
     auth_required: bool
     llm_configured: bool
     embeddings_configured: bool
+    agent_enabled: bool = False
 
 
 def _require_usage_admin(request: Request) -> str:
@@ -298,6 +328,7 @@ def health() -> HealthResponse:
         auth_required=auth_required(),
         llm_configured=bool(settings.openai_api_key),
         embeddings_configured=_embeddings_configured(),
+        agent_enabled=settings.enable_agent_mode,
         context_limits=ContextLimits(
             max_upload_mb=settings.max_upload_mb,
             max_extract_chars_per_file=settings.max_extract_chars_per_file,
@@ -484,6 +515,9 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
     result = None
     if job.kind == "query" and job.result:
         result = QueryResponse(**job.result)
+    agent_result = None
+    if job.kind == "agent" and job.result:
+        agent_result = AgentResponse(**job.result)
     return JobStatusResponse(
         job_id=job.id,
         kind=job.kind,
@@ -500,6 +534,8 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
         elapsed_ms=job.elapsed_ms,
         result=result,
         library_report=job.library_report,
+        agent_steps=[AgentStep(**s) for s in job.agent_steps],
+        agent_result=agent_result,
     )
 
 
@@ -523,6 +559,25 @@ def query(request: Request, body: QueryRequest) -> QueryJobResponse:
         },
     )
     return QueryJobResponse(job_id=job.id, status=job.status)
+
+
+@app.post("/agent/run", response_model=QueryJobResponse)
+def agent_run(request: Request, body: AgentRequest) -> QueryJobResponse:
+    require_api_key(request)
+    _require_keys()
+    if not settings.enable_agent_mode:
+        raise HTTPException(
+            status_code=404,
+            detail="Agent mode is not enabled on this server (set ENABLE_AGENT_MODE=true).",
+        )
+    email = authenticated_email(request)
+    job = start_background_agent(
+        question=body.question,
+        email=email,
+        session_id=body.session_id,
+        history=body.history,
+    )
+    return QueryJobResponse(job_id=job.id, status=job.status, message="Agent started.")
 
 
 class ClientErrorReport(BaseModel):

@@ -55,6 +55,13 @@ Open **http://localhost:8000** — upload files and chat.
 
 See **[DEPLOY.md](DEPLOY.md)** for a full Railway guide (volumes, env vars, public URL).
 
+## Personal local prototype (laptop, Ollama-backed)
+
+See **[LOCAL_PROTOTYPE.md](LOCAL_PROTOTYPE.md)** to run a second, independent copy of
+Project SPK on your own laptop against a local Ollama model instead of the OpenAI API —
+useful for rehearsing the self-hosted setup before buying dedicated GPU hardware.
+Production on Railway is unaffected.
+
 Quick checklist:
 
 1. Push to GitHub
