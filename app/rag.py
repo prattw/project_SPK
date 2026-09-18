@@ -171,6 +171,35 @@ class RAGService:
         self._documents_cache = docs_sorted
         return docs_sorted
 
+    def get_source_chunks(self, source: str, max_chunks: int = 40) -> list[dict[str, Any]]:
+        """Return the indexed chunks for one exact source filename, in page order.
+
+        Used by agent tools that need to "read" a specific document rather than
+        semantically search across the whole index (e.g. "summarize this file").
+        """
+        if not source or self.document_count == 0:
+            return []
+        result = self._collection.get(
+            where={"source": source},
+            include=["documents", "metadatas"],
+            limit=max_chunks * 4,  # over-fetch, then sort/trim below
+        )
+        documents = result.get("documents") or []
+        metadatas = result.get("metadatas") or []
+        chunks: list[dict[str, Any]] = []
+        for text, meta in zip(documents, metadatas):
+            meta = meta or {}
+            chunks.append(
+                {
+                    "source": source,
+                    "text": text or "",
+                    "page_start": meta.get("page_start"),
+                    "page_end": meta.get("page_end"),
+                }
+            )
+        chunks.sort(key=lambda c: (c.get("page_start") is None, c.get("page_start") or 0))
+        return chunks[:max_chunks]
+
     @staticmethod
     def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         text = text.strip()

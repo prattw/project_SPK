@@ -4,6 +4,7 @@ import base64
 import mimetypes
 import re
 from pathlib import Path
+from typing import Any
 
 from openai import BadRequestError, OpenAI
 
@@ -114,11 +115,17 @@ Be precise and practical. If you are not certain, say so.
 Since no project documents were retrieved, cite publication numbers from general knowledge instead of page-level citations."""
 
 
-def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
-    """Call the chat API, handling parameter differences between model generations.
+def _create_completion(
+    messages: list[dict[str, Any]],
+    *,
+    temperature: float,
+    tools: list[dict[str, Any]] | None = None,
+):
+    """Shared low-level chat-completion call with cross-model parameter fallback.
 
     Newer OpenAI models (gpt-5 family, o-series) require max_completion_tokens
     and reject custom temperature; older ones (gpt-4o family) accept max_tokens.
+    Returns the raw SDK message object (content and, if requested, tool_calls).
     """
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
@@ -130,6 +137,9 @@ def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
         "max_completion_tokens": settings.openai_max_tokens,
         "temperature": temperature,
     }
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
     for _ in range(3):
         try:
             response = client.chat.completions.create(**kwargs)
@@ -139,7 +149,7 @@ def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
                     prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
                     completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
                 )
-            return (response.choices[0].message.content or "").strip()
+            return response.choices[0].message
         except BadRequestError as exc:
             param = getattr(exc, "param", None) or ""
             message = str(exc)
@@ -151,6 +161,29 @@ def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
                 continue
             raise
     raise RuntimeError("Could not find compatible parameters for the configured model")
+
+
+def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
+    """Call the chat API and return the assistant's text content."""
+    message = _create_completion(messages, temperature=temperature)
+    return (message.content or "").strip()
+
+
+def chat_with_tools(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    *,
+    temperature: float = 0.2,
+):
+    """Call the chat API with tool/function definitions for the agent loop.
+
+    Returns the raw message object so the caller can inspect `.tool_calls`
+    (a list of {id, function: {name, arguments}}) in addition to `.content`.
+    Requires a model that supports OpenAI-style tool calling — most current
+    Ollama chat models do (qwen2.5, llama3.1+, mistral-nemo, etc.); see
+    LOCAL_PROTOTYPE.md for picking one.
+    """
+    return _create_completion(messages, temperature=temperature, tools=tools)
 
 
 IMAGE_ANALYSIS_PROMPT = """You are analyzing an image uploaded to a USACE construction-document assistant so it can be searched and reviewed later.

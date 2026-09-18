@@ -41,6 +41,8 @@ class Job:
     query_email: str | None = None
     query_session_id: str | None = None
     query_question: str = ""
+    # agent (tool-calling)
+    agent_steps: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def elapsed_ms(self) -> int | None:
@@ -318,6 +320,75 @@ def start_background_query(
     thread = threading.Thread(
         target=run_query_job,
         args=(job.id, query_kwargs),
+        daemon=True,
+    )
+    thread.start()
+    return job
+
+
+def create_agent_job(*, question: str, email: str | None, session_id: str | None) -> Job:
+    job = Job(
+        id=str(uuid.uuid4()),
+        kind="agent",
+        query_question=question,
+        query_email=email,
+        query_session_id=session_id,
+    )
+    with _lock:
+        _jobs[job.id] = job
+    record_query_start(job_id=job.id, email=email, session_id=session_id, question=question)
+    return job
+
+
+def run_agent_job(job_id: str, *, question: str, history: list[dict[str, str]] | None) -> None:
+    from app.agent import run_agent
+
+    def on_step(step: dict[str, Any]) -> None:
+        job = get_job(job_id)
+        steps = list(job.agent_steps) if job else []
+        steps.append(step)
+        _update(job_id, agent_steps=steps, message=f"Ran {step['tool']} — {step['summary']}")
+
+    try:
+        _update(job_id, status="running", started_at=time.time(), message="Agent is working…")
+        start_tracking()
+        result = run_agent(question, history=history, on_step=on_step)
+        tokens = get_tracking()
+        _update(
+            job_id,
+            status="done",
+            finished_at=time.time(),
+            result=result,
+            agent_steps=result.get("steps", []),
+            message="Complete.",
+        )
+        record_query_finish(job_id=job_id, status="done", tokens=tokens)
+    except Exception as exc:  # noqa: BLE001 — surface to client
+        tokens = get_tracking()
+        _update(job_id, status="error", finished_at=time.time(), message=str(exc))
+        record_query_finish(job_id=job_id, status="error", tokens=tokens, error=str(exc))
+        job = get_job(job_id)
+        record_error(
+            email=job.query_email if job else None,
+            session_id=job.query_session_id if job else None,
+            source="agent",
+            message=str(exc),
+            detail=job.query_question if job else None,
+        )
+
+
+def start_background_agent(
+    *,
+    question: str,
+    email: str | None,
+    session_id: str | None,
+    history: list[dict[str, str]] | None = None,
+) -> Job:
+    job = create_agent_job(question=question, email=email, session_id=session_id)
+    thread = threading.Thread(
+        target=run_agent_job,
+        args=(job.id,),
+        kwargs={"question": question, "history": history},
         daemon=True,
     )
     thread.start()
