@@ -197,6 +197,57 @@ To try it out, upload a PDF or two through the UI and ask questions, same
 as the production app. Expect noticeably slower answers and a less capable
 model than the Railway/OpenAI version — that's the hardware, not a bug.
 
+## Bulk-loading a document library (e.g. a "Master Library" folder)
+
+If you already have a folder of documents on the laptop you want indexed —
+rather than uploading files one at a time through the UI — use
+`scripts/bulk_ingest.py`. It walks a folder recursively, indexes every
+supported file, and is safe to interrupt and re-run (it skips filenames
+already in the index).
+
+**1. Stop the app first.** ChromaDB doesn't support two processes writing
+to the same index at once, and `./start.sh` holds it open:
+
+```bash
+# In the terminal running ./start.sh, press Ctrl+C.
+# Or, from another terminal:
+pkill -f uvicorn
+```
+
+**2. Find the folder from inside WSL2.** Windows drives are mounted under
+`/mnt/<drive letter>/`, so a folder that's `C:\Users\CYRUS\Documents\Master
+Library` in Windows Explorer is this path inside Ubuntu:
+
+```bash
+/mnt/c/Users/CYRUS/Documents/Master Library
+```
+
+(Swap `CYRUS` and the folder name for whatever's actually in your path —
+this works the same way for any folder under any Windows drive letter.)
+
+**3. Run the bulk ingest**, quoting the path because it has a space in it:
+
+```bash
+source .venv/bin/activate
+python scripts/bulk_ingest.py "/mnt/c/Users/CYRUS/Documents/Master Library"
+```
+
+It prints one line per file (`OK`, `SKIP`, or `FAIL`) plus a running count,
+so you can watch progress or leave it running in the background for a large
+library. Supported file types: `.pdf .docx .xlsx .csv .pptx .txt .md .xml
+.xer .ifc`, plus common image/CAD formats stored for reference. Unsupported
+files are skipped, not treated as errors.
+
+**4. Restart the app** once it finishes:
+
+```bash
+./start.sh
+```
+
+Your uploaded/ingested documents now live in `chroma_db_local/` and
+`data_local/` on this laptop only — see the embedding-incompatibility note
+above for why this can never be merged with production's index.
+
 ## What this does *not* cover
 
 - **Offline/no-internet field use.** A different effort
