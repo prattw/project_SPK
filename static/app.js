@@ -15,6 +15,8 @@ const uploadStatusEl = document.getElementById("uploadStatus");
 const limitsListEl = document.getElementById("limitsList");
 const configStatus = document.getElementById("configStatus");
 const versionBadge = document.getElementById("versionBadge");
+const agentToggleWrap = document.getElementById("agentToggleWrap");
+const agentToggle = document.getElementById("agentToggle");
 const sessionListEl = document.getElementById("sessionList");
 const sessionSearch = document.getElementById("sessionSearch");
 const newChatBtn = document.getElementById("newChatBtn");
@@ -174,7 +176,7 @@ function openSession(id) {
   messagesEl.innerHTML = "";
   clearUploadChips();
   welcomeEl.hidden = s.messages.length > 0;
-  s.messages.forEach((m) => renderMessage(m.role, m.text, m.sources || [], m.citations || []));
+  s.messages.forEach((m) => renderMessage(m.role, m.text, m.sources || [], m.citations || [], m.steps || []));
   showView("chat");
   renderSessionList();
   chatScroll.scrollTop = chatScroll.scrollHeight;
@@ -339,7 +341,32 @@ function renderMarkdown(text) {
   return out.join("");
 }
 
-function renderMessage(role, text, sources = [], citations = []) {
+const AGENT_TOOL_LABELS = {
+  search_documents: "Searched the library",
+  list_documents: "Listed indexed documents",
+  read_document: "Read a document",
+  draft_docx_report: "Drafted a report",
+};
+
+function renderAgentSteps(steps) {
+  const wrap = document.createElement("details");
+  wrap.className = "agent-steps";
+  const summary = document.createElement("summary");
+  summary.textContent = `Agent steps (${steps.length})`;
+  wrap.appendChild(summary);
+  const list = document.createElement("ol");
+  for (const step of steps) {
+    const li = document.createElement("li");
+    li.className = step.ok === false ? "agent-step-error" : "";
+    const label = AGENT_TOOL_LABELS[step.tool] || step.tool;
+    li.textContent = `${label} — ${step.summary || ""}`;
+    list.appendChild(li);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function renderMessage(role, text, sources = [], citations = [], steps = []) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   if (role === "file") {
@@ -354,6 +381,7 @@ function renderMessage(role, text, sources = [], citations = []) {
     return;
   }
   if (role === "assistant") {
+    if (steps?.length) div.appendChild(renderAgentSteps(steps));
     const md = document.createElement("div");
     md.className = "md";
     md.innerHTML = renderMarkdown(text);
@@ -404,13 +432,13 @@ function reportClientError(message, context) {
   }
 }
 
-function addMessage(role, text, sources = [], citations = []) {
+function addMessage(role, text, sources = [], citations = [], steps = []) {
   welcomeEl.hidden = true;
-  renderMessage(role, text, sources, citations);
+  renderMessage(role, text, sources, citations, steps);
   if (role === "error") reportClientError(text, "chat");
 
   const s = ensureSession();
-  s.messages.push({ role, text, sources, citations });
+  s.messages.push({ role, text, sources, citations, steps });
   if (role === "user" && s.title === "New conversation") {
     s.title = text.length > 60 ? text.slice(0, 57) + "..." : text;
   }
@@ -697,6 +725,7 @@ async function loadLimits() {
     authRequired = data.auth_required;
     updateConfigStatus(data);
     if (data.version) versionBadge.textContent = `BETA v${data.version}`;
+    if (agentToggleWrap) agentToggleWrap.hidden = !data.agent_enabled;
 
     const L = data.context_limits;
     const ctxK = Math.round(L.max_context_chars / 1000);
@@ -968,6 +997,33 @@ async function pollQueryJob(jobId) {
   }
 }
 
+async function pollAgentJob(jobId, onProgress) {
+  const interval = 1500;
+
+  for (;;) {
+    let res;
+    let job;
+    try {
+      res = await apiFetch(`/jobs/${jobId}`);
+      job = await readJsonResponse(res);
+    } catch (err) {
+      return { ok: false, message: err.message || "Could not check agent status." };
+    }
+    if (!res.ok) {
+      return { ok: false, message: job.detail || "Could not check agent status." };
+    }
+    if (job.status === "queued" || job.status === "running") {
+      if (onProgress) onProgress(job.message, job.agent_steps || []);
+      await new Promise((r) => setTimeout(r, interval));
+      continue;
+    }
+    if (job.status === "done" && job.agent_result) {
+      return { ok: true, data: job.agent_result, elapsed_ms: job.elapsed_ms };
+    }
+    return { ok: false, message: job.message || "Agent run failed." };
+  }
+}
+
 async function pollJob(jobId, filename, pagesTotal, onProgress) {
   const interval = 3000;
 
@@ -1186,21 +1242,77 @@ questionEl.addEventListener("drop", (e) => {
 
 /* ---------- Chat ---------- */
 
+async function askAgent(question, s, history) {
+  const payload = { question };
+  if (s?.id) payload.session_id = s.id;
+  if (history?.length) payload.history = history.slice(0, -1);
+
+  try {
+    const res = await apiFetch("/agent/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    let data;
+    try {
+      data = await readJsonResponse(res);
+    } catch {
+      addMessage(
+        "error",
+        "The server returned an unexpected response when starting the agent. Please try again."
+      );
+      return;
+    }
+    if (!res.ok) {
+      addMessage("error", data.detail || "Agent run failed.");
+      return;
+    }
+
+    showNotice("Agent is working…", "info");
+    const result = await pollAgentJob(data.job_id, (message) => {
+      if (message) showNotice(message, "info");
+    });
+    hideNotice();
+    if (!result.ok) {
+      addMessage("error", result.message || "Agent run failed.");
+      return;
+    }
+    addMessage(
+      "assistant",
+      result.data.answer,
+      result.data.sources || [],
+      [],
+      result.data.steps || []
+    );
+  } catch (err) {
+    hideNotice();
+    addMessage("error", err.message || "Network error — is the server running?");
+  }
+}
+
 async function askQuestion(question) {
   ensureSession();
   addMessage("user", question);
   setLoading(true);
   hideNotice();
+
+  const s = currentSession();
+  const history = sessionHistory();
+
+  if (agentToggle?.checked && !agentToggleWrap?.hidden) {
+    await askAgent(question, s, history);
+    setLoading(false);
+    return;
+  }
+
   showWaitingFacts();
 
   // Search the full Document Library plus all user uploads, but prioritize files
   // attached to this session so follow-ups still see uploaded chapter text.
   const payload = { question, include_library: true };
-  const s = currentSession();
   if (s?.id) payload.session_id = s.id;
   const focus = sessionFocusSources();
   if (focus?.length) payload.focus_sources = focus;
-  const history = sessionHistory();
   if (history?.length) payload.history = history.slice(0, -1);
 
   try {

@@ -637,6 +637,35 @@ body {
   padding-top: 0.45rem;
 }
 
+.agent-steps {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: #f6f7f9;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
+}
+
+.agent-steps summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.agent-steps ol {
+  margin: 0.4rem 0 0.1rem;
+  padding-left: 1.2rem;
+}
+
+.agent-steps li {
+  margin: 0.2rem 0;
+}
+
+.agent-steps li.agent-step-error {
+  color: var(--usace-red);
+}
+
 /* ---------- Composer ---------- */
 .composer-wrap {
   padding: 0.75rem 1rem 1rem;
