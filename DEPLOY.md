@@ -225,54 +225,130 @@ curl -s "$SPK_URL/admin/library/incoming" -H "Authorization: Bearer $SPK_TOKEN"
 
 ## Email Assistant (Outlook)
 
-The **Email Assistant** tab summarizes an Outlook thread, triages what it asks of
-the user, and drafts a reply the user reviews and sends themselves. Two input paths
-work with no additional IT approvals:
+Opening the **Email Assistant** tab reads the last 72 hours of email, triages every
+message, and prepares the work each one implies:
 
-- **Paste** — select the email in Outlook, `Ctrl+A`, `Ctrl+C`, paste into the tab.
-- **Upload .msg** — drag the email out of Outlook and upload the `.msg` file.
+| Output | Format | What the user does with it |
+| --- | --- | --- |
+| Reply draft | `.eml` | Opens in Outlook as an unsent message, ready to edit and send |
+| Note for the record | `.md` | Paste into OneNote, RMS, or the project file |
+| Appointment / meeting invite | `.ics` | Double-click to open in Outlook, then save or send |
 
-Project SPK **never sends email and never connects to a mailbox.** Reading a
-mailbox directly requires Entra ID app registration, admin consent, a delegated
-user token, and a security review — all documented in
-[docs/OUTLOOK_INTEGRATION.md](docs/OUTLOOK_INTEGRATION.md). `GET /email/status`
-reports exactly what is still outstanding, and the UI shows the same list.
+Plus a digest across the window: what is high priority, what replies are owed, and
+every date anyone mentioned.
+
+Project SPK **never sends email and never writes to a calendar.** Every artifact is
+a file the user opens, checks, and acts on. It also never invites anyone who was not
+already on the thread, and never produces a calendar file for a time it could not
+verify.
+
+### Where the mail comes from
+
+| `OUTLOOK_CONNECTOR` | Sweeps unattended? | What it needs |
+| --- | --- | --- |
+| `manual` (default) | No — the user picks the files | Nothing |
+| `local_folder` | **Yes** | A directory the host can read exported `.msg`/`.eml` from |
+| `graph` | Yes, once provisioned | Entra ID registration, admin consent, delegated token, security review |
+
+`local_folder` is how the sweep runs autonomously with **no cloud access, no tenant
+changes, and no stored credentials**:
+
+```bash
+OUTLOOK_CONNECTOR=local_folder
+OUTLOOK_LOCAL_FOLDER=/data/mail-inbox
+```
+
+An Outlook rule, a scheduled export, or a manual drag fills the folder; Project SPK
+only reads it. On Railway, put the folder on the mounted volume so it survives
+redeploys. Full setup in
+[docs/OUTLOOK_INTEGRATION.md](docs/OUTLOOK_INTEGRATION.md).
+
+With the default `manual` connector the sweep still works — the user selects the
+messages in Outlook, drags them to a folder to save them as `.msg`, and uses
+**Choose email files**.
 
 > **Read before rollout:** email text is sent to whatever endpoint `OPENAI_API_KEY`
-> and `OPENAI_BASE_URL` point at. Email is more likely than criteria documents to
-> contain CUI or PII — see the Email Assistant note in
+> and `OPENAI_BASE_URL` point at, and a sweep sends 72 hours of it rather than one
+> thread the user chose. Email is far more likely than criteria documents to contain
+> CUI or PII. To process it on a model you control, see
+> [docs/SELF_HOSTED_MODEL.md](docs/SELF_HOSTED_MODEL.md) — it is a configuration
+> change, not a code change. Also read the Email Assistant note in
 > [SECURITY.md](SECURITY.md#hosting-and-data-caution-read-this).
+
+`GET /email/status` reports the host that actually processes email, and the tab shows
+a banner naming it: amber for a commercial API on the public internet, green for a
+self-hosted endpoint.
 
 ### Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `EMAIL_ASSISTANT_ENABLED` | `true` | Set `false` to hide/disable the feature entirely |
-| `EMAIL_MAX_CHARS` | `60000` | Largest email thread accepted |
+| `EMAIL_ASSISTANT_ENABLED` | `true` | Set `false` to disable the whole email feature |
+| `EMAIL_MAX_CHARS` | `60000` | Largest single email thread accepted |
 | `EMAIL_SCRUB_PII` | `true` | Redact SSN/EDIPI/DOB/card numbers before the LLM |
 | `EMAIL_LIBRARY_TOP_K` | `24` | Retrieval budget when a reply cites the Document Library |
-| `OUTLOOK_CONNECTOR` | `manual` | `manual` or `graph` (graph is not operational yet) |
+| `EMAIL_SWEEP_ENABLED` | `true` | Set `false` to keep single-email actions but disable the sweep |
+| `EMAIL_SWEEP_HOURS` | `72` | How far back a sweep reads |
+| `EMAIL_SWEEP_MAX_MESSAGES` | `40` | Messages one sweep analyzes; bounds time and spend |
+| `EMAIL_SWEEP_MAX_HOURS` | `336` | Ceiling on a user-supplied window |
+| `EMAIL_SWEEP_AUTOSTART` | `true` | Sweep on tab open when the source reads mail unattended |
+| `EMAIL_SWEEP_TIMEZONE` | `America/Los_Angeles` | Resolves "Thursday at 10" into a real `.ics` time |
+| `EMAIL_SWEEP_DRAFTS` / `_NOTES` / `_INVITES` | `true` | Turn individual outputs off |
+| `OUTLOOK_CONNECTOR` | `manual` | `manual`, `local_folder`, or `graph` |
+| `OUTLOOK_LOCAL_FOLDER` | _(empty)_ | Directory of exported `.msg`/`.eml` |
 | `OUTLOOK_GRAPH_CLOUD` | `gcchigh` | `commercial`, `gcc`, `gcchigh`, or `dod` |
 | `OUTLOOK_TENANT_ID` / `OUTLOOK_CLIENT_ID` / `OUTLOOK_CLIENT_SECRET` | _(empty)_ | Entra ID app registration, once provisioned |
 
-`.msg` parsing needs the `extract-msg` package (already in `requirements.txt`). If
-it is missing, the `.msg` button hides itself and pasting still works.
+Set `EMAIL_SWEEP_TIMEZONE` to the district's timezone, not the server's — it decides
+what time lands in a calendar invite.
+
+Budgeting a sweep: at most two model calls per message, so the default cap of 40
+messages is 80 calls worst case. Lower `EMAIL_SWEEP_MAX_MESSAGES` or turn off
+`EMAIL_SWEEP_DRAFTS` to cut it.
+
+`.msg` parsing needs the `extract-msg` package (already in `requirements.txt`). If it
+is missing, `.msg` uploads are skipped with a warning; `.eml` uses the standard
+library and always works.
 
 ### API
 
 ```bash
-# What the assistant can do on this deployment
+# What the assistant can do, where the model runs, and what mailbox access needs
 curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/email/status"
 
-# Summarize + triage
+# Sweep the configured source; poll the job for progress and the report
+curl -X POST "$SPK_URL/email/sweep" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"hours":72}'
+curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/jobs/$JOB_ID"
+
+# Sweep a batch the user exported from Outlook
+curl -X POST "$SPK_URL/email/sweep/upload" -H "Authorization: Bearer $SPK_TOKEN" \
+  -F "files=@msg1.msg" -F "files=@msg2.msg"
+
+# See what a sweep would read, without spending any model calls
+curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/email/mailbox/messages?hours=72"
+
+# Single email: summarize + triage
 curl -X POST "$SPK_URL/email/analyze" \
   -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
   -d '{"text":"From: ...\nSubject: ...\n\nbody"}'
 
-# Draft a reply, citing the Document Library
+# Single email: draft a reply, citing the Document Library
 curl -X POST "$SPK_URL/email/draft-reply" \
   -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
   -d '{"text":"From: ...","instructions":"Hold the 21-day review period.","tone":"formal","use_library":true}'
+```
+
+A sweep report contains message bodies, so `GET /jobs/{id}` returns it only to the
+user who started the sweep. Anyone else gets a 404.
+
+### Testing without a key or a mailbox
+
+```bash
+python scripts/test_email_sweep.py       # parsing, .ics/.eml/.md output, sweep logic
+python scripts/test_email_sweep_api.py   # endpoints, job plumbing, access control
+python scripts/run_email_sweep_demo.py   # local server with sample district email on :8010
 ```
 
 Email actions appear in the Friday weekly report as

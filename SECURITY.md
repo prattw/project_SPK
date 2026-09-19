@@ -88,15 +88,33 @@ Notes:
   straightforward.
 - The OpenAI API also processes the document text; for CUI, the
   government-authorized equivalent is Azure OpenAI Government.
-- The **Email Assistant** sends pasted email text to the same OpenAI endpoint. Email
-  is more likely than uploaded criteria documents to carry CUI, PII,
-  procurement-sensitive, or attorney-client content, so this is the sharpest edge of
-  the caution above. Redirecting `OPENAI_BASE_URL` to an accredited deployment moves
-  email processing along with everything else. High-confidence identifiers (SSN,
-  EDIPI, date of birth, payment card numbers) are redacted before any text reaches
-  the model, and the UI reports what was redacted — but that is incidental-PII
-  defense-in-depth, **not** a CUI control. Project SPK never sends email and never
-  connects to a mailbox; see `docs/OUTLOOK_INTEGRATION.md`.
+- The **Email Assistant** sends email text to the same OpenAI endpoint, and this is
+  the sharpest edge of the caution above. Email is far more likely than uploaded
+  criteria documents to carry CUI, PII, procurement-sensitive, or attorney-client
+  content.
+
+  The autonomous sweep raises the **volume**, not the kind: opening the tab processes
+  up to 72 hours of mail rather than one thread the user deliberately chose. If an
+  endpoint is not acceptable for one email it is not acceptable for forty.
+  `EMAIL_SWEEP_ENABLED=false` disables the sweep while leaving the single-email
+  actions, and `EMAIL_ASSISTANT_ENABLED=false` disables the feature entirely.
+
+  Redirecting `OPENAI_BASE_URL` to an accredited or self-hosted deployment moves email
+  processing along with everything else — a configuration change, not a code change.
+  See `docs/SELF_HOSTED_MODEL.md`. Because this is the decisive fact about a
+  deployment, `GET /email/status` reports the host that actually processes email and
+  the UI shows a banner naming it, so an unaccredited endpoint is visible rather than
+  implicit.
+
+  High-confidence identifiers (SSN, EDIPI, date of birth, payment card numbers) are
+  redacted before any text reaches the model, and the UI reports what was redacted —
+  but that is incidental-PII defense-in-depth, **not** a CUI control.
+
+  Boundaries that hold regardless of endpoint: Project SPK never sends email, never
+  writes to a calendar, never invites an address that was not already on the thread,
+  and never indexes email content into the document library. Sweep results contain
+  message bodies and are returned only to the user who ran the sweep. See
+  `docs/OUTLOOK_INTEGRATION.md`.
 
 ## Recommendation
 
