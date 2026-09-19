@@ -153,6 +153,20 @@ def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
     raise RuntimeError("Could not find compatible parameters for the configured model")
 
 
+def chat_completion(
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.35,
+) -> str:
+    """Run a chat completion with an explicit message list.
+
+    Exposed for features that need their own system prompt rather than the
+    USACE question-answering persona (e.g. the email assistant). Token usage is
+    recorded automatically when tracking is active.
+    """
+    return _chat(messages, temperature=temperature)
+
+
 IMAGE_ANALYSIS_PROMPT = """You are analyzing an image uploaded to a USACE construction-document assistant so it can be searched and reviewed later.
 
 Produce two clearly labeled sections:

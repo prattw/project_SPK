@@ -88,6 +88,15 @@ Notes:
   straightforward.
 - The OpenAI API also processes the document text; for CUI, the
   government-authorized equivalent is Azure OpenAI Government.
+- The **Email Assistant** sends pasted email text to the same OpenAI endpoint. Email
+  is more likely than uploaded criteria documents to carry CUI, PII,
+  procurement-sensitive, or attorney-client content, so this is the sharpest edge of
+  the caution above. Redirecting `OPENAI_BASE_URL` to an accredited deployment moves
+  email processing along with everything else. High-confidence identifiers (SSN,
+  EDIPI, date of birth, payment card numbers) are redacted before any text reaches
+  the model, and the UI reports what was redacted — but that is incidental-PII
+  defense-in-depth, **not** a CUI control. Project SPK never sends email and never
+  connects to a mailbox; see `docs/OUTLOOK_INTEGRATION.md`.
 
 ## Recommendation
 

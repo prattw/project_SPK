@@ -1,3 +1,4 @@
+import tempfile
 import threading
 import zipfile
 from contextlib import asynccontextmanager
@@ -22,6 +23,13 @@ from app.auth import (
 )
 from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
+from app.email_assistant import DEFAULT_TONE, REPLY_TONES, analyze_thread, draft_reply
+from app.email_messages import (
+    EmailThread,
+    msg_support_available,
+    parse_msg_file,
+    parse_pasted_email,
+)
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
 from app.jobs import get_job, start_background_ingest, start_background_library_ingest, start_background_query
 from app.library_ingest import (
@@ -29,14 +37,17 @@ from app.library_ingest import (
     library_incoming_path,
     save_incoming_upload,
 )
+from app.outlook_connector import connector_status
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
+from app.token_usage import get_tracking, start_tracking
 from app.usage import (
     format_weekly_report_text,
     get_weekly_snapshot,
     init_usage_db,
     is_usage_admin,
     list_weekly_snapshots,
+    record_email_usage,
     record_error,
     record_login,
     record_upload,
@@ -223,7 +234,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.8.1",
+    version="0.9.1",
     lifespan=lifespan,
 )
 
@@ -523,6 +534,175 @@ def query(request: Request, body: QueryRequest) -> QueryJobResponse:
         },
     )
     return QueryJobResponse(job_id=job.id, status=job.status)
+
+
+class EmailAnalyzeRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200_000, description="Email text pasted from Outlook")
+    session_id: str | None = Field(default=None, max_length=64)
+
+
+class EmailDraftRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200_000, description="Email text pasted from Outlook")
+    instructions: str = Field(default="", max_length=4_000, description="What the reply should say or do")
+    tone: str = Field(default=DEFAULT_TONE, max_length=32)
+    use_library: bool = Field(default=False, description="Ground the reply in the Document Library")
+    session_id: str | None = Field(default=None, max_length=64)
+
+
+def _require_email_assistant() -> None:
+    if not settings.email_assistant_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="The email assistant is disabled on this deployment (set EMAIL_ASSISTANT_ENABLED=true).",
+        )
+
+
+def _parse_email_request(text: str) -> EmailThread:
+    if len(text) > settings.email_max_chars:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"That email is {len(text):,} characters, over the "
+                f"{settings.email_max_chars:,} character limit. Paste a shorter portion of the thread."
+            ),
+        )
+    thread = parse_pasted_email(text, scrub=settings.email_scrub_pii)
+    if not any(turn.body.strip() for turn in thread.turns):
+        raise HTTPException(status_code=400, detail="No email text found. Paste the email body.")
+    return thread
+
+
+@app.get("/email/status")
+def email_status(request: Request) -> dict:
+    """What the email assistant can do on this deployment, and what it cannot."""
+    require_api_key(request)
+    return {
+        "enabled": settings.email_assistant_enabled,
+        "scrub_pii": settings.email_scrub_pii,
+        "max_chars": settings.email_max_chars,
+        "msg_upload_supported": msg_support_available(),
+        "tones": [{"key": key, "description": value} for key, value in REPLY_TONES.items()],
+        "mailbox": connector_status(),
+    }
+
+
+@app.post("/email/analyze")
+def email_analyze(request: Request, body: EmailAnalyzeRequest) -> dict:
+    """Summarize and triage a pasted Outlook email in one pass."""
+    require_api_key(request)
+    _require_email_assistant()
+    _require_keys()
+    email = authenticated_email(request)
+    thread = _parse_email_request(body.text)
+
+    start_tracking()
+    try:
+        analysis = analyze_thread(thread, user_email=email)
+    except ValueError as exc:
+        record_error(
+            email=email, session_id=body.session_id, source="email", message=str(exc), detail="analyze"
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — surface a readable message, log the rest
+        record_error(
+            email=email, session_id=body.session_id, source="email", message=str(exc), detail="analyze"
+        )
+        raise HTTPException(status_code=500, detail=f"Could not analyze that email: {exc}") from exc
+    finally:
+        record_email_usage(
+            email=email,
+            session_id=body.session_id,
+            action="analyze",
+            tokens=get_tracking(),
+        )
+
+    return {"email": thread.as_dict(), "analysis": analysis}
+
+
+@app.post("/email/draft-reply")
+def email_draft_reply(request: Request, body: EmailDraftRequest) -> dict:
+    """Draft a reply for the user to review and send from Outlook themselves."""
+    require_api_key(request)
+    _require_email_assistant()
+    _require_keys()
+    email = authenticated_email(request)
+    thread = _parse_email_request(body.text)
+
+    start_tracking()
+    try:
+        draft = draft_reply(
+            thread,
+            instructions=body.instructions,
+            tone=body.tone,
+            use_library=body.use_library,
+            user_email=email,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface a readable message, log the rest
+        record_error(
+            email=email, session_id=body.session_id, source="email", message=str(exc), detail="draft"
+        )
+        raise HTTPException(status_code=500, detail=f"Could not draft a reply: {exc}") from exc
+    finally:
+        record_email_usage(
+            email=email,
+            session_id=body.session_id,
+            action="draft",
+            tokens=get_tracking(),
+        )
+
+    return {"email": thread.as_dict(), "draft": draft}
+
+
+@app.post("/email/parse-msg")
+async def email_parse_msg(request: Request, file: UploadFile = File(...)) -> dict:
+    """Parse an Outlook .msg file dragged out of Outlook into thread text.
+
+    Returns the extracted text so the client can review it before running an
+    analysis or draft. The file is parsed in a temp directory and never indexed —
+    email content does not enter the document search index.
+    """
+    require_api_key(request)
+    _require_email_assistant()
+
+    if not msg_support_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Reading .msg files requires the 'extract-msg' package on the server. "
+                "Paste the email text instead."
+            ),
+        )
+
+    name = Path(file.filename or "").name
+    if not name.lower().endswith(".msg"):
+        raise HTTPException(status_code=400, detail="Upload an Outlook .msg file.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="That .msg file is empty.")
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail="That .msg file is too large.")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / name
+        path.write_bytes(data)
+        try:
+            thread = await run_in_threadpool(
+                parse_msg_file, path, scrub=settings.email_scrub_pii
+            )
+        except Exception as exc:  # noqa: BLE001 — bad .msg should not 500 silently
+            record_error(
+                email=authenticated_email(request),
+                session_id=None,
+                source="email",
+                message=str(exc),
+                detail="parse-msg",
+            )
+            raise HTTPException(
+                status_code=400, detail=f"Could not read that .msg file: {exc}"
+            ) from exc
+
+    return {"email": thread.as_dict(), "text": thread.to_prompt_text()}
 
 
 class ClientErrorReport(BaseModel):

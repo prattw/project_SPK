@@ -89,6 +89,22 @@ class Settings(BaseSettings):
     min_library_chunks_in_context: int = 12
     library_subquery_slots: int = 8
 
+    # --- Email assistant (Outlook) ---
+    # Summarizing/drafting from an email the user pastes or uploads carries the
+    # same risk profile as the document uploads the app already accepts, so it is
+    # on by default. Reading a mailbox directly does not: outlook_connector stays
+    # "manual" until Entra ID access is provisioned and security-reviewed.
+    email_assistant_enabled: bool = True
+    email_max_chars: int = 60_000
+    email_scrub_pii: bool = True  # redact SSN/EDIPI/DOB/card numbers before the LLM sees the text
+    email_library_top_k: int = 24  # retrieval budget when a reply cites the Document Library
+
+    outlook_connector: str = "manual"  # manual | graph
+    outlook_graph_cloud: str = "gcchigh"  # commercial | gcc | gcchigh | dod
+    outlook_tenant_id: str = ""
+    outlook_client_id: str = ""
+    outlook_client_secret: str = ""
+
     @property
     def roster_emails(self) -> frozenset[str]:
         return frozenset(

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.4" />
+  <link rel="stylesheet" href="/static/style.css?v=0.9.7" />
 </head>
 <body>
   <!-- Email login gate (first screen) -->
@@ -55,6 +55,10 @@
     <button type="button" class="tab" data-view="uploads">
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
       User Uploaded Documents
+    </button>
+    <button type="button" class="tab" data-view="email">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4-8 5-8-5V6l8 5 8-5z"/></svg>
+      Email Assistant
     </button>
     <div class="tabbar-right"></div>
   </nav>
@@ -2031,6 +2035,79 @@
           <div id="uploadList" class="file-grid"></div>
         </div>
       </section>
+
+      <!-- Email Assistant (Outlook) -->
+      <section id="view-email" class="view" hidden>
+        <div class="docs-panel docs-panel-email">
+          <div class="docs-head">
+            <h2>Email Assistant</h2>
+          </div>
+          <p class="docs-desc">
+            Summarize an Outlook email thread, see what it asks of you, and get a reply draft
+            you review and send yourself.
+          </p>
+
+          <div class="email-notice" role="note">
+            <strong>Before you paste:</strong> email text is sent to the AI model to be processed,
+            the same way uploaded documents are. Do not paste classified material. For CUI,
+            PII, procurement-sensitive, or attorney-client content, follow your organization's
+            policy on AI tools first. Obvious identifiers (SSN, EDIPI, date of birth, card
+            numbers) are redacted automatically, but that is not a substitute for your own review.
+            Project SPK never sends email on your behalf.
+          </div>
+
+          <div id="emailMailboxStatus" class="email-mailbox" hidden></div>
+
+          <div class="email-input-head">
+            <label class="email-label" for="emailText">Paste the email thread from Outlook</label>
+            <label class="upload-btn email-msg-btn">
+              <input type="file" id="emailMsgInput" accept=".msg" hidden />
+              Upload .msg
+            </label>
+          </div>
+          <textarea
+            id="emailText"
+            class="email-textarea"
+            rows="12"
+            placeholder="Select the email in Outlook, press Ctrl+A then Ctrl+C, and paste here. Include the From/Sent/To/Subject lines so the assistant can see who is asking what."
+          ></textarea>
+          <div id="emailInputNote" class="email-input-note" hidden></div>
+
+          <div class="email-actions">
+            <button type="button" id="emailAnalyzeBtn" class="email-btn email-btn-primary">
+              Summarize &amp; triage
+            </button>
+            <button type="button" id="emailDraftBtn" class="email-btn">Draft a reply</button>
+            <button type="button" id="emailClearBtn" class="email-btn email-btn-quiet">Clear</button>
+          </div>
+
+          <details class="email-reply-options" id="emailReplyOptions">
+            <summary>Reply options</summary>
+            <div class="email-reply-grid">
+              <label class="email-field">
+                <span>Tone</span>
+                <select id="emailTone" class="email-select"></select>
+              </label>
+              <label class="email-field email-field-wide">
+                <span>What should the reply say or do? (optional)</span>
+                <input
+                  type="text"
+                  id="emailInstructions"
+                  class="email-input"
+                  placeholder="e.g. Hold the 21-day review period and ask for the missing mix design data."
+                />
+              </label>
+              <label class="email-check">
+                <input type="checkbox" id="emailUseLibrary" />
+                <span>Cite the Document Library (slower — retrieves the controlling USACE policy)</span>
+              </label>
+            </div>
+          </details>
+
+          <div id="emailStatus" class="email-status" hidden></div>
+          <div id="emailResults" class="email-results"></div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -2078,6 +2155,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.4"></script>
+  <script src="/static/app.js?v=0.9.7"></script>
 </body>
 </html>

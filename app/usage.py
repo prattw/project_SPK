@@ -131,6 +131,20 @@ def init_usage_db() -> None:
                     occurred_at REAL NOT NULL
                 );
 
+                -- Email assistant actions. Subject lines and bodies are never
+                -- stored: government email content stays out of the metrics DB.
+                CREATE TABLE IF NOT EXISTS email_actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT,
+                    session_id TEXT,
+                    action TEXT NOT NULL,
+                    used_at REAL NOT NULL,
+                    prompt_tokens INTEGER DEFAULT 0,
+                    completion_tokens INTEGER DEFAULT 0,
+                    embedding_tokens INTEGER DEFAULT 0,
+                    total_tokens INTEGER DEFAULT 0
+                );
+
                 CREATE TABLE IF NOT EXISTS weekly_reports (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     week_ending TEXT NOT NULL UNIQUE,
@@ -148,6 +162,8 @@ def init_usage_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_uploads_at ON uploads(uploaded_at);
                 CREATE INDEX IF NOT EXISTS idx_errors_email ON errors(email);
                 CREATE INDEX IF NOT EXISTS idx_errors_at ON errors(occurred_at);
+                CREATE INDEX IF NOT EXISTS idx_email_actions_email ON email_actions(email);
+                CREATE INDEX IF NOT EXISTS idx_email_actions_at ON email_actions(used_at);
                 """
             )
             conn.commit()
@@ -268,6 +284,49 @@ def record_upload(
             conn.commit()
         finally:
             conn.close()
+
+
+def record_email_usage(
+    *,
+    email: str | None,
+    session_id: str | None,
+    action: str,
+    tokens: TokenTotals | None = None,
+) -> None:
+    """Log one email-assistant action (analyze | draft).
+
+    Only the action and token counts are recorded. Subject lines, bodies, and
+    participants are deliberately not stored.
+    """
+    totals = tokens or TokenTotals()
+    try:
+        with _lock:
+            conn = _connect()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO email_actions (
+                        email, session_id, action, used_at,
+                        prompt_tokens, completion_tokens, embedding_tokens, total_tokens
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        email,
+                        session_id,
+                        action[:32],
+                        time.time(),
+                        totals.prompt_tokens,
+                        totals.completion_tokens,
+                        totals.embedding_tokens,
+                        totals.total_tokens,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception:
+        # Metrics must never break the feature they measure.
+        pass
 
 
 def record_error(
@@ -448,15 +507,71 @@ def weekly_usage_report(as_of: datetime | None = None) -> dict[str, Any]:
                 "SELECT COUNT(*) AS c FROM uploads WHERE uploaded_at >= ? AND uploaded_at < ?",
                 (start_ts, end_ts),
             ).fetchone()["c"]
+
+            email_rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT
+                        COALESCE(email, 'unknown') AS email,
+                        COUNT(*) AS email_action_count,
+                        COALESCE(SUM(CASE WHEN action = 'analyze' THEN 1 ELSE 0 END), 0) AS emails_analyzed,
+                        COALESCE(SUM(CASE WHEN action = 'draft' THEN 1 ELSE 0 END), 0) AS email_drafts,
+                        COALESCE(SUM(total_tokens), 0) AS email_tokens
+                    FROM email_actions
+                    WHERE used_at >= ? AND used_at < ?
+                    GROUP BY COALESCE(email, 'unknown')
+                    ORDER BY email_action_count DESC
+                    """,
+                    (start_ts, end_ts),
+                ).fetchall()
+            ]
+
+            email_totals = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS action_count,
+                    COALESCE(SUM(CASE WHEN action = 'analyze' THEN 1 ELSE 0 END), 0) AS analyzed,
+                    COALESCE(SUM(CASE WHEN action = 'draft' THEN 1 ELSE 0 END), 0) AS drafts,
+                    COALESCE(SUM(total_tokens), 0) AS tokens
+                FROM email_actions
+                WHERE used_at >= ? AND used_at < ?
+                """,
+                (start_ts, end_ts),
+            ).fetchone()
         finally:
             conn.close()
+
+    def _blank_user(email: str) -> dict[str, Any]:
+        return {
+            "email": email,
+            "query_count": 0,
+            "queries_done": 0,
+            "queries_error": 0,
+            "active_prompting_ms": 0,
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "embedding_tokens": 0,
+            "avg_response_ms": 0.0,
+            "last_query_at": None,
+            "last_query_at_pacific": None,
+            "login_count": 0,
+            "last_login_at": None,
+            "last_login_at_pacific": None,
+            "upload_count": 0,
+            "upload_bytes": 0,
+            "email_action_count": 0,
+            "emails_analyzed": 0,
+            "email_drafts": 0,
+            "email_tokens": 0,
+        }
 
     # Merge per-user activity into one roster-friendly table
     by_email: dict[str, dict[str, Any]] = {}
     for row in users:
         email = row["email"]
-        by_email[email] = {
-            "email": email,
+        by_email[email] = _blank_user(email) | {
             "query_count": int(row["query_count"] or 0),
             "queries_done": int(row["queries_done"] or 0),
             "queries_error": int(row["queries_error"] or 0),
@@ -468,65 +583,22 @@ def weekly_usage_report(as_of: datetime | None = None) -> dict[str, Any]:
             "avg_response_ms": float(row["avg_response_ms"] or 0),
             "last_query_at": row["last_query_at"],
             "last_query_at_pacific": _fmt_iso_pacific(row["last_query_at"]),
-            "login_count": 0,
-            "last_login_at": None,
-            "last_login_at_pacific": None,
-            "upload_count": 0,
-            "upload_bytes": 0,
         }
     for row in login_rows:
-        email = row["email"]
-        entry = by_email.setdefault(
-            email,
-            {
-                "email": email,
-                "query_count": 0,
-                "queries_done": 0,
-                "queries_error": 0,
-                "active_prompting_ms": 0,
-                "total_tokens": 0,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "embedding_tokens": 0,
-                "avg_response_ms": 0.0,
-                "last_query_at": None,
-                "last_query_at_pacific": None,
-                "login_count": 0,
-                "last_login_at": None,
-                "last_login_at_pacific": None,
-                "upload_count": 0,
-                "upload_bytes": 0,
-            },
-        )
+        entry = by_email.setdefault(row["email"], _blank_user(row["email"]))
         entry["login_count"] = int(row["login_count"] or 0)
         entry["last_login_at"] = row["last_login_at"]
         entry["last_login_at_pacific"] = _fmt_iso_pacific(row["last_login_at"])
     for row in upload_rows:
-        email = row["email"]
-        entry = by_email.setdefault(
-            email,
-            {
-                "email": email,
-                "query_count": 0,
-                "queries_done": 0,
-                "queries_error": 0,
-                "active_prompting_ms": 0,
-                "total_tokens": 0,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "embedding_tokens": 0,
-                "avg_response_ms": 0.0,
-                "last_query_at": None,
-                "last_query_at_pacific": None,
-                "login_count": 0,
-                "last_login_at": None,
-                "last_login_at_pacific": None,
-                "upload_count": 0,
-                "upload_bytes": 0,
-            },
-        )
+        entry = by_email.setdefault(row["email"], _blank_user(row["email"]))
         entry["upload_count"] = int(row["upload_count"] or 0)
         entry["upload_bytes"] = int(row["total_bytes"] or 0)
+    for row in email_rows:
+        entry = by_email.setdefault(row["email"], _blank_user(row["email"]))
+        entry["email_action_count"] = int(row["email_action_count"] or 0)
+        entry["emails_analyzed"] = int(row["emails_analyzed"] or 0)
+        entry["email_drafts"] = int(row["email_drafts"] or 0)
+        entry["email_tokens"] = int(row["email_tokens"] or 0)
 
     users_merged = sorted(
         by_email.values(),
@@ -557,6 +629,10 @@ def weekly_usage_report(as_of: datetime | None = None) -> dict[str, Any]:
             "uploads": int(upload_total or 0),
             "active_prompting_ms": int(totals["active_prompting_ms"] or 0),
             "total_tokens": int(totals["total_tokens"] or 0),
+            "email_actions": int(email_totals["action_count"] or 0),
+            "emails_analyzed": int(email_totals["analyzed"] or 0),
+            "email_drafts": int(email_totals["drafts"] or 0),
+            "email_tokens": int(email_totals["tokens"] or 0),
             "errors": len(errors),
         },
         "users": users_merged,
@@ -798,7 +874,10 @@ def format_weekly_report_text(report: dict[str, Any]) -> str:
         f"  Queries:      {totals.get('queries', 0)} "
         f"(done {totals.get('queries_done', 0)}, error {totals.get('queries_error', 0)})",
         f"  Uploads:      {totals.get('uploads', 0)}",
-        f"  Tokens:       {int(totals.get('total_tokens', 0)):,}",
+        f"  Email agent:  {totals.get('email_actions', 0)} actions "
+        f"({totals.get('emails_analyzed', 0)} analyzed, {totals.get('email_drafts', 0)} drafts)",
+        f"  Tokens:       {int(totals.get('total_tokens', 0)):,} query "
+        f"+ {int(totals.get('email_tokens', 0)):,} email",
         f"  Active time:  {int(totals.get('active_prompting_ms', 0)) / 1000:.0f}s",
         f"  Errors:       {totals.get('errors', 0)}",
         "",
@@ -813,7 +892,8 @@ def format_weekly_report_text(report: dict[str, Any]) -> str:
             f"{u.get('query_count', 0)} queries, "
             f"{u.get('login_count', 0)} logins, "
             f"{u.get('upload_count', 0)} uploads, "
-            f"{int(u.get('total_tokens', 0)):,} tokens"
+            f"{u.get('email_action_count', 0)} email actions, "
+            f"{int(u.get('total_tokens', 0)) + int(u.get('email_tokens', 0)):,} tokens"
         )
     lines.append("")
     return "\n".join(lines)
