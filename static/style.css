@@ -1708,8 +1708,15 @@ body {
 .email-artifact-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.9rem;
   margin-top: 0.9rem;
+}
+
+/* Save and copy belong to the same artifact, so keep them tight together and
+   rely on the larger row gap to separate one artifact's pair from the next. */
+.email-artifact-pair {
+  display: inline-flex;
+  gap: 0.3rem;
 }
 
 .email-artifact-btn {

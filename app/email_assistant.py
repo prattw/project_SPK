@@ -281,13 +281,18 @@ def _normalize_meeting(
     else:
         start, end = None, None
 
+    # Only people already on the thread can be invited, and an empty list stays
+    # empty. Both matter: falling back to "everyone on the email" would turn a
+    # block-time appointment into an external meeting request, and an
+    # unconstrained list would let a hallucinated address onto an invite.
+    on_thread = set(thread.participants)
     attendees = [
-        address.lower()
-        for address in _as_str_list(data.get("attendees"), limit=25)
-        if "@" in address
+        address
+        for address in (
+            value.strip().lower() for value in _as_str_list(data.get("attendees"), limit=25)
+        )
+        if "@" in address and address in on_thread
     ]
-    if not attendees:
-        attendees = thread.participants[:25]
 
     return {
         "title": (str(data.get("title") or "").strip() or thread.subject or "Meeting")[:200],

@@ -46,6 +46,11 @@ ProgressCallback = Callable[[str, int, int, str], None]
 
 _PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
+# Artifacts are built in whatever order is cheapest, but presented in the order
+# the user is most likely to act: answer the email, put it on the calendar, file
+# the note.
+_ARTIFACT_ORDER = {"reply": 0, "invite": 1, "note": 2, "invite_error": 3}
+
 
 @dataclass
 class SweepItem:
@@ -77,7 +82,9 @@ class SweepItem:
             "note": self.note,
             "meeting": meeting,
             "draft": self.draft,
-            "artifacts": self.artifacts,
+            "artifacts": sorted(
+                self.artifacts, key=lambda a: _ARTIFACT_ORDER.get(a.get("kind", ""), 9)
+            ),
             "error": self.error,
         }
 

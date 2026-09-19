@@ -1850,26 +1850,32 @@ function renderSweepProgress(job) {
   }
 }
 
+// A .ics file is only useful to Outlook, so there is nothing worth copying to the
+// clipboard for one — the reply and the note are text a person actually pastes.
+const SWEEP_ARTIFACT_ACTIONS = {
+  reply: { save: "Open in Outlook", copy: "Copy reply" },
+  invite: { save: "Add to calendar", copy: "" },
+  note: { save: "Save note", copy: "Copy note" },
+};
+
 function sweepArtifactButtons(artifacts, itemIndex) {
   const buttons = (artifacts || [])
-    .map((artifact, position) => {
-      if (artifact.kind === "invite_error") return "";
+    .map((artifact) => {
+      const actions = SWEEP_ARTIFACT_ACTIONS[artifact.kind];
+      if (!actions) return "";
       const index = sweepArtifacts.length;
       sweepArtifacts.push(artifact);
-      const verb =
-        artifact.kind === "reply"
-          ? "Open in Outlook"
-          : artifact.kind === "invite"
-            ? "Add to calendar"
-            : "Save note";
+      const extension = (artifact.filename.match(/\.[a-z]+$/i) || [""])[0];
       return (
+        `<span class="email-artifact-pair">` +
         `<button type="button" class="email-artifact-btn" data-sweep-download="${index}" ` +
-        `title="${escapeHtml(artifact.filename)}">${escapeHtml(verb)}` +
-        `<span class="email-artifact-ext">${escapeHtml(
-          (artifact.filename.match(/\.[a-z]+$/i) || [""])[0]
-        )}</span></button>` +
-        `<button type="button" class="email-artifact-btn email-artifact-btn-quiet" ` +
-        `data-sweep-copy="${index}">Copy</button>`
+        `title="${escapeHtml(artifact.filename)}">${escapeHtml(actions.save)}` +
+        `<span class="email-artifact-ext">${escapeHtml(extension)}</span></button>` +
+        (actions.copy
+          ? `<button type="button" class="email-artifact-btn email-artifact-btn-quiet" ` +
+            `data-sweep-copy="${index}">${escapeHtml(actions.copy)}</button>`
+          : "") +
+        `</span>`
       );
     })
     .filter(Boolean)
@@ -2185,8 +2191,13 @@ function describeSweepSource(data) {
   if (!emailSweepSourceEl) return;
   emailSweepSourceEl.hidden = false;
   if (sweep.can_read_mailbox) {
-    emailSweepSourceEl.innerHTML =
-      `<strong>Reading from:</strong> ${escapeHtml(mailbox.description || mailbox.connector || "")}`;
+    // Kept short on purpose: the Mailbox connection block above already carries
+    // the full description, so this only names the source.
+    const where =
+      mailbox.connector === "local_folder"
+        ? `exported email files in <code>${escapeHtml(mailbox.folder || "")}</code>`
+        : "your Outlook mailbox";
+    emailSweepSourceEl.innerHTML = `<strong>Reading from:</strong> ${where}`;
     return;
   }
   emailSweepSourceEl.innerHTML =

@@ -304,7 +304,7 @@ def test_artifacts() -> None:
 
 def test_meeting_validation() -> None:
     print("\nMeeting proposal validation")
-    from app.email_messages import EmailThread
+    from app.email_messages import EmailThread, EmailTurn
 
     tz = timezone.utc
     thread = EmailThread(subject="Coordination", to="a@b.mil")
@@ -333,14 +333,47 @@ def test_meeting_validation() -> None:
     )
     check("unparseable time flagged", unparseable is not None and unparseable["time_known"] is False)
 
+    on_thread = EmailThread(
+        subject="Coordination",
+        turns=[EmailTurn(sender="dana@usace.army.mil", to="you@usace.army.mil, ok@usace.army.mil")],
+    )
     attendees = email_assistant._normalize_meeting(
-        {"needed": True, "start": "2026-09-22T10:00", "attendees": ["Not an address", "ok@usace.army.mil"]},
-        thread,
+        {
+            "needed": True,
+            "start": "2026-09-22T10:00",
+            "attendees": ["Not an address", "ok@usace.army.mil"],
+        },
+        on_thread,
         tz=tz,
         now=now,
     )
     check("non-addresses dropped", attendees is not None and attendees["attendees"] == ["ok@usace.army.mil"],
           str(attendees and attendees["attendees"]))
+
+    # An agent that invents an invitee, or that quietly invites everyone on a
+    # thread to what should be a private time block, causes real harm.
+    invented = email_assistant._normalize_meeting(
+        {"needed": True, "start": "2026-09-22T10:00", "attendees": ["stranger@example.com"]},
+        on_thread,
+        tz=tz,
+        now=now,
+    )
+    check("addresses not on the thread are refused",
+          invented is not None and invented["attendees"] == [], str(invented and invented["attendees"]))
+
+    block_time = email_assistant._normalize_meeting(
+        {"needed": True, "title": "Block time", "start": "2026-09-22T10:00", "attendees": []},
+        on_thread,
+        tz=tz,
+        now=now,
+    )
+    check("empty attendee list stays empty",
+          block_time is not None and block_time["attendees"] == [], str(block_time and block_time["attendees"]))
+    solo_ics = build_ics(
+        {**block_time, "description": ""}, organizer="you@usace.army.mil", attendees=block_time["attendees"]
+    )
+    check("private appointment sends no invitations", "ATTENDEE" not in solo_ics)
+    check("private appointment is PUBLISH not REQUEST", "METHOD:PUBLISH" in solo_ics)
 
 
 def test_windowing() -> None:
