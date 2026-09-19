@@ -1,25 +1,30 @@
 """Email agents: read, summarize, triage, and draft replies to Outlook email.
 
-Three actions, all operating on a parsed :class:`~app.email_messages.EmailThread`:
+Actions, all operating on a parsed :class:`~app.email_messages.EmailThread`:
 
 * :func:`summarize_thread` — what the thread says, decisions, and open questions
 * :func:`triage_thread` — priority, category, whether a reply is owed, due dates
+* :func:`analyze_for_sweep` — the above, plus a note for the record and a meeting
+  proposal, in one call; this is what the autonomous sweep uses
 * :func:`draft_reply` — a reply the user edits and sends themselves
 
 Replies can optionally be grounded in the Document Library, so an answer about
 submittal review periods quotes the controlling ER instead of guessing.
 
-This module never sends email. Every action produces text for a human to review;
-:mod:`app.outlook_connector` deliberately exposes draft creation but no send.
+This module never sends email and never writes to a calendar. Every action
+produces text or a file for a human to review; :mod:`app.outlook_connector`
+deliberately exposes draft creation but no send.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, tzinfo
 from typing import Any
 
 from app.config import settings
+from app.email_artifacts import resolve_meeting_window
 from app.email_messages import EmailThread
 from app.llm import chat_completion
 
@@ -64,6 +69,53 @@ _ANALYSIS_FORMAT = """Return ONLY a JSON object, with no markdown fences and no 
 }
 
 Use empty arrays rather than inventing content. Keep every string under 400 characters."""
+
+# The sweep asks for the note and the meeting proposal in the same call as the
+# analysis. All three come from one read of the email, so splitting them into
+# separate calls would triple the cost for answers that could disagree.
+_SWEEP_FORMAT = """Return ONLY a JSON object, with no markdown fences and no prose around it, shaped exactly like this:
+
+{
+  "summary": "2-4 sentence plain-language summary of the thread and where it stands.",
+  "key_points": ["Specific factual points, decisions, or positions stated in the thread."],
+  "action_items": [
+    {"action": "What needs to be done.", "owner": "Who owes it, or 'unclear'.", "due": "Date or timeframe stated in the email, or 'none stated'."}
+  ],
+  "open_questions": ["Questions the thread raises that are not yet answered."],
+  "deadlines": ["Any dates or deadlines explicitly stated in the thread."],
+  "priority": "high | medium | low",
+  "priority_reason": "One sentence explaining the priority.",
+  "category": "Short label, e.g. 'submittal review', 'contract modification', 'RFI', 'scheduling', 'administrative', 'informational'.",
+  "reply_needed": true,
+  "reply_needed_reason": "One sentence on why a reply is or is not owed.",
+  "suggested_next_step": "The single most useful next action for the user.",
+  "note": {
+    "title": "Short title for a note in the project record.",
+    "body": "3-6 sentences a reader who never saw the email could file and understand later.",
+    "decisions": ["Decisions or commitments the thread establishes."],
+    "followups": ["What the user should follow up on, and roughly when."]
+  },
+  "meeting": {
+    "needed": false,
+    "title": "Subject line for the appointment or meeting request.",
+    "start": "YYYY-MM-DDTHH:MM local time, or \\"\\" if the email states no specific time.",
+    "duration_minutes": 30,
+    "location": "Room, address, or 'Microsoft Teams' if the email says so. \\"\\" if unstated.",
+    "agenda": ["What the meeting needs to cover, drawn from the thread."],
+    "attendees": ["Email addresses from the thread who should be invited."],
+    "reason": "One sentence on why this meeting is warranted."
+  }
+}
+
+Rules for "meeting":
+- Set "needed": true only when the thread actually calls for a meeting, site visit, \
+call, or a deadline the user should block time for. Ordinary informational mail needs no meeting.
+- "start" must be an absolute local datetime. Resolve relative references ("Thursday at 10", \
+"tomorrow afternoon") against the current date given below. If the email proposes no time at all, \
+set "needed": true only if a meeting is clearly required, and leave "start" empty — the user will pick a time.
+- Never invent a time that the email does not support.
+
+Use empty arrays and false rather than inventing content. Keep every string under 600 characters."""
 
 
 def _library_context(query: str) -> tuple[str, list[dict[str, Any]]]:
@@ -164,6 +216,132 @@ def _normalize_analysis(parsed: dict[str, Any]) -> dict[str, Any]:
         "reply_needed": bool(reply_needed),
         "reply_needed_reason": str(parsed.get("reply_needed_reason") or "").strip(),
         "suggested_next_step": str(parsed.get("suggested_next_step") or "").strip(),
+    }
+
+
+def _normalize_note(value: Any, analysis: dict[str, Any], thread: EmailThread) -> dict[str, Any]:
+    data = value if isinstance(value, dict) else {}
+    title = str(data.get("title") or "").strip() or (thread.subject or "Email note")
+    body = str(data.get("body") or "").strip() or analysis.get("summary", "")
+    return {
+        "title": title[:200],
+        "body": body,
+        "decisions": _as_str_list(data.get("decisions"), limit=12),
+        "followups": _as_str_list(data.get("followups"), limit=12),
+    }
+
+
+def _local_datetime(value: Any, *, tz: tzinfo) -> datetime | None:
+    """Parse a model-supplied local datetime string into an aware datetime."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.replace("Z", "+00:00")
+    if "T" not in text and " " in text:
+        text = text.replace(" ", "T", 1)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=tz) if parsed.tzinfo is None else parsed
+
+
+def _normalize_meeting(
+    value: Any,
+    thread: EmailThread,
+    *,
+    tz: tzinfo,
+    now: datetime,
+) -> dict[str, Any] | None:
+    """Validate a meeting proposal, or return None when there is nothing to schedule.
+
+    A proposal with no usable time still comes back, flagged ``time_known: False``,
+    so the UI can offer the agenda and attendee list for the user to schedule
+    themselves. Resolved times that land in the past are treated as unusable
+    rather than written into a calendar file.
+    """
+    data = value if isinstance(value, dict) else {}
+    needed = data.get("needed")
+    if isinstance(needed, str):
+        needed = needed.strip().lower() in {"true", "yes", "y"}
+    if not needed:
+        return None
+
+    start = _local_datetime(data.get("start"), tz=tz)
+    end = _local_datetime(data.get("end"), tz=tz)
+    duration = data.get("duration_minutes")
+    try:
+        duration = int(duration) if duration is not None else None
+    except (TypeError, ValueError):
+        duration = None
+
+    time_known = start is not None and start >= now
+    if start is not None and time_known:
+        start, end = resolve_meeting_window(start, duration_minutes=duration, end=end)
+    else:
+        start, end = None, None
+
+    attendees = [
+        address.lower()
+        for address in _as_str_list(data.get("attendees"), limit=25)
+        if "@" in address
+    ]
+    if not attendees:
+        attendees = thread.participants[:25]
+
+    return {
+        "title": (str(data.get("title") or "").strip() or thread.subject or "Meeting")[:200],
+        "start": start,
+        "end": end,
+        "time_known": time_known,
+        "duration_minutes": duration or 30,
+        "location": str(data.get("location") or "").strip()[:200],
+        "agenda": _as_str_list(data.get("agenda"), limit=12),
+        "attendees": attendees,
+        "reason": str(data.get("reason") or "").strip(),
+        "description": str(data.get("reason") or "").strip(),
+    }
+
+
+def analyze_for_sweep(
+    thread: EmailThread,
+    *,
+    user_email: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Analysis plus a note and a meeting proposal, in a single LLM call.
+
+    The current date is supplied so the model can turn "Thursday at 10" into an
+    absolute time; :func:`_normalize_meeting` then throws out anything it cannot
+    verify, because a wrong calendar entry is worse than none.
+    """
+    tz = settings.sweep_tzinfo
+    now = (now or datetime.now(tz)).astimezone(tz)
+    viewer = f"\n\nThe user reading this email is {user_email}." if user_email else ""
+    clock = (
+        f"\n\nThe current date and time is {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}. "
+        "Resolve every relative date or time against it."
+    )
+    messages = [
+        {"role": "system", "content": f"{_BASE_PERSONA}{viewer}{clock}\n\n{_SWEEP_FORMAT}"},
+        {
+            "role": "user",
+            "content": (
+                f"Analyze this Outlook email thread. Produce the analysis, a note for the "
+                f"project record, and a meeting proposal if one is warranted.\n\n"
+                f"Subject: {thread.subject or '(none)'}\n"
+                f"Received: {thread.sent or 'unknown'}\n\n"
+                f"{thread.to_prompt_text()}"
+            ),
+        },
+    ]
+    raw = chat_completion(messages, temperature=0.2)
+    parsed = _parse_json_response(raw)
+    analysis = _normalize_analysis(parsed)
+    return {
+        "analysis": analysis,
+        "note": _normalize_note(parsed.get("note"), analysis, thread),
+        "meeting": _normalize_meeting(parsed.get("meeting"), thread, tz=tz, now=now),
     }
 
 

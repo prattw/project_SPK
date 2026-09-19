@@ -1,21 +1,32 @@
 """Mailbox connectors for the email assistant.
 
-Project SPK can obtain an email three ways. Two work today; the third needs
-tenant approvals that only USACE IT can grant.
+Project SPK can obtain email three ways. Two work today; the third needs tenant
+approvals that only USACE IT can grant.
 
 =====================  ==========  ============================================
 Connector              Status      What it needs
 =====================  ==========  ============================================
 ``manual``             Working     Nothing. The user pastes the email, or drags
-                                   a ``.msg`` file out of Outlook.
+                                   ``.msg``/``.eml`` files out of Outlook —
+                                   including a multi-select for a whole sweep.
+``local_folder``       Working     A directory on the machine running Project
+                                   SPK that recent mail is exported into. No
+                                   cloud, no tenant changes, no credentials.
 ``graph``              Gated       An Entra ID (Azure AD) app registration in
                                    the USACE tenant, admin-consented delegated
                                    Mail permissions, and a per-user OAuth token.
 =====================  ==========  ============================================
 
-**No connector can send email.** Graph draft creation is exposed so a reply can
-be saved into the user's Drafts folder for them to review and send from Outlook;
-``Mail.Send`` is deliberately not requested anywhere in this codebase.
+``local_folder`` is what makes the autonomous 72-hour sweep work before any
+Microsoft 365 integration exists. Point an Outlook rule, a scheduled export, or
+a small local script at a directory; Project SPK reads the files already sitting
+there. That keeps mailbox credentials out of the application entirely, which is
+also the posture most likely to clear a security review.
+
+**No connector can send email, and none writes to a calendar.** Graph draft
+creation is exposed so a reply can be saved into the user's Drafts folder for
+them to review and send from Outlook; ``Mail.Send`` is deliberately not
+requested anywhere in this codebase.
 
 See ``docs/OUTLOOK_INTEGRATION.md`` for the full provisioning checklist.
 """
@@ -23,10 +34,17 @@ See ``docs/OUTLOOK_INTEGRATION.md`` for the full provisioning checklist.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 from app.config import settings
-from app.email_messages import EmailThread, parse_pasted_email
+from app.email_messages import (
+    SUPPORTED_MESSAGE_SUFFIXES,
+    EmailThread,
+    parse_message_file,
+    parse_pasted_email,
+)
 
 # Microsoft Graph hosts differ by cloud. A GCC High or DoD tenant will NOT work
 # against the commercial endpoints, and vice versa.
@@ -91,8 +109,29 @@ class MailConnector(Protocol):
     def status(self) -> dict[str, Any]:
         """Describe availability and any unmet setup requirements."""
 
-    def list_messages(self, *, user_email: str, folder: str = "inbox", limit: int = 25) -> list[MailboxMessageRef]:
-        """Most recent messages in a folder, newest first."""
+    def list_messages(
+        self,
+        *,
+        user_email: str,
+        folder: str = "inbox",
+        since: datetime | None = None,
+        limit: int = 25,
+    ) -> list[MailboxMessageRef]:
+        """Most recent messages in a folder, newest first, no older than ``since``."""
+
+    def recent_threads(
+        self,
+        *,
+        user_email: str,
+        since: datetime,
+        limit: int = 40,
+    ) -> list[EmailThread]:
+        """Parsed threads received since ``since``, newest first.
+
+        What the autonomous sweep consumes. Separate from
+        :meth:`list_messages` so a connector that already has the full message in
+        hand does not have to parse it twice.
+        """
 
     def get_thread(self, *, user_email: str, message_id: str) -> EmailThread:
         """Fetch one message and its quoted history."""
@@ -127,22 +166,199 @@ class ManualConnector:
     def thread_from_text(self, text: str, *, scrub: bool = True) -> EmailThread:
         return parse_pasted_email(text, scrub=scrub)
 
-    def list_messages(self, *, user_email: str, folder: str = "inbox", limit: int = 25) -> list[MailboxMessageRef]:
-        raise MailboxUnavailable(
-            "Project SPK is not connected to your mailbox. Paste an email or upload a .msg file instead.",
-            requirements=["Enable and provision the Microsoft Graph connector to browse a mailbox."],
+    def _no_mailbox(self) -> MailboxUnavailable:
+        return MailboxUnavailable(
+            "Project SPK is not connected to a mailbox. Select the last few days of email in "
+            "Outlook and drag the messages in, or paste a single thread.",
+            requirements=[
+                "Set OUTLOOK_CONNECTOR=local_folder with OUTLOOK_LOCAL_FOLDER to sweep exported "
+                "mail automatically, with no cloud access.",
+                "Or provision the Microsoft Graph connector to read the mailbox directly.",
+            ],
         )
 
+    def list_messages(
+        self,
+        *,
+        user_email: str,
+        folder: str = "inbox",
+        since: datetime | None = None,
+        limit: int = 25,
+    ) -> list[MailboxMessageRef]:
+        raise self._no_mailbox()
+
+    def recent_threads(
+        self,
+        *,
+        user_email: str,
+        since: datetime,
+        limit: int = 40,
+    ) -> list[EmailThread]:
+        raise self._no_mailbox()
+
     def get_thread(self, *, user_email: str, message_id: str) -> EmailThread:
-        raise MailboxUnavailable(
-            "Project SPK is not connected to your mailbox. Paste an email or upload a .msg file instead.",
-            requirements=["Enable and provision the Microsoft Graph connector to browse a mailbox."],
-        )
+        raise self._no_mailbox()
 
     def create_draft_reply(self, *, user_email: str, message_id: str, body: str) -> dict[str, Any]:
         raise MailboxUnavailable(
-            "Project SPK cannot write to your Drafts folder. Copy the draft into Outlook instead.",
+            "Project SPK cannot write to your Drafts folder. Download the draft as a .eml and "
+            "open it in Outlook instead.",
             requirements=["Enable and provision the Microsoft Graph connector to save drafts."],
+        )
+
+
+class LocalFolderConnector:
+    """Read ``.msg``/``.eml`` files from a directory on the Project SPK host.
+
+    The whole mailbox problem reduced to a filesystem read. Something outside
+    Project SPK — an Outlook rule with a "run a script" action, a scheduled
+    PowerShell export, a Power Automate Desktop flow — drops recent mail into a
+    directory, and this connector enumerates it. Project SPK holds no mailbox
+    credentials and makes no network calls, so there is nothing for a tenant
+    admin to consent to.
+
+    Files are only ever read. Nothing is written, moved, or deleted, so whatever
+    populates the directory stays in charge of retention.
+    """
+
+    name = "local_folder"
+
+    def __init__(self, folder: str | Path | None = None) -> None:
+        configured = str(folder or settings.outlook_local_folder or "").strip()
+        self.folder = Path(configured).expanduser() if configured else None
+
+    def missing_requirements(self) -> list[str]:
+        if self.folder is None:
+            return [
+                "OUTLOOK_LOCAL_FOLDER — a directory on the machine running Project SPK that "
+                "recent .msg/.eml files are exported into."
+            ]
+        if not self.folder.exists():
+            return [f"The configured folder does not exist: {self.folder}"]
+        if not self.folder.is_dir():
+            return [f"The configured path is not a directory: {self.folder}"]
+        return []
+
+    @property
+    def available(self) -> bool:
+        return not self.missing_requirements()
+
+    def status(self) -> dict[str, Any]:
+        missing = self.missing_requirements()
+        return {
+            "connector": self.name,
+            "available": not missing,
+            "can_read_mailbox": not missing,
+            "can_create_drafts": False,
+            "can_send": False,
+            "folder": str(self.folder) if self.folder else "",
+            "description": (
+                f"Reads exported .msg/.eml files from {self.folder}. Project SPK never connects "
+                "to Exchange or Microsoft 365 in this mode, and never modifies the folder."
+                if not missing
+                else "Configure OUTLOOK_LOCAL_FOLDER to sweep exported mail from a local directory."
+            ),
+            "requirements": missing,
+        }
+
+    def _message_files(self) -> list[Path]:
+        if self.folder is None:
+            return []
+        return [
+            path
+            for path in self.folder.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_MESSAGE_SUFFIXES
+        ]
+
+    def _resolve(self, message_id: str) -> Path:
+        """Map an opaque id back to a file, refusing anything outside the folder."""
+        if self.folder is None:
+            raise MailboxUnavailable(
+                "No local mail folder is configured.",
+                requirements=self.missing_requirements(),
+            )
+        name = Path(message_id).name
+        if not name or name != message_id:
+            raise MailboxUnavailable(f"Unknown message id: {message_id}")
+        path = (self.folder / name).resolve()
+        if path.parent != self.folder.resolve() or not path.is_file():
+            raise MailboxUnavailable(f"Unknown message id: {message_id}")
+        return path
+
+    def _received(self, thread: EmailThread, path: Path) -> datetime:
+        """The message's own date, falling back to the file's modification time."""
+        if thread.received_at:
+            return thread.received_at
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+
+    def recent_threads(
+        self,
+        *,
+        user_email: str,
+        since: datetime,
+        limit: int = 40,
+    ) -> list[EmailThread]:
+        if not self.available:
+            raise MailboxUnavailable(
+                "The local mail folder is not usable.",
+                requirements=self.missing_requirements(),
+            )
+
+        # Skip files whose mtime is well before the window before paying to parse
+        # them. A message can be older than its file but never newer, so the
+        # margin only has to cover export lag.
+        cutoff = since.timestamp() - 86_400
+        candidates = sorted(
+            (p for p in self._message_files() if p.stat().st_mtime >= cutoff),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+        threads: list[tuple[datetime, EmailThread]] = []
+        for path in candidates:
+            try:
+                thread = parse_message_file(path, scrub=settings.email_scrub_pii)
+            except Exception:  # noqa: BLE001 — one unreadable file must not stop the sweep
+                continue
+            received = self._received(thread, path)
+            if received < since:
+                continue
+            thread.received_at = received
+            threads.append((received, thread))
+
+        threads.sort(key=lambda item: item[0], reverse=True)
+        return [thread for _, thread in threads[:limit]]
+
+    def list_messages(
+        self,
+        *,
+        user_email: str,
+        folder: str = "inbox",
+        since: datetime | None = None,
+        limit: int = 25,
+    ) -> list[MailboxMessageRef]:
+        window = since or datetime.fromtimestamp(0, tz=timezone.utc)
+        return [
+            MailboxMessageRef(
+                id=thread.origin_id,
+                subject=thread.subject,
+                sender=thread.sender,
+                received=thread.received_at.isoformat() if thread.received_at else "",
+                preview=thread.body[:200],
+                is_read=True,
+                has_attachments=bool(thread.attachments),
+            )
+            for thread in self.recent_threads(user_email=user_email, since=window, limit=limit)
+        ]
+
+    def get_thread(self, *, user_email: str, message_id: str) -> EmailThread:
+        return parse_message_file(self._resolve(message_id), scrub=settings.email_scrub_pii)
+
+    def create_draft_reply(self, *, user_email: str, message_id: str, body: str) -> dict[str, Any]:
+        raise MailboxUnavailable(
+            "Reading a folder does not give Project SPK a mailbox to write drafts into. "
+            "Download the draft as a .eml and open it in Outlook.",
+            requirements=["Provision the Microsoft Graph connector to save drafts in Outlook."],
         )
 
 
@@ -230,7 +446,27 @@ class GraphMailConnector:
             requirements=self.missing_requirements(),
         )
 
-    def list_messages(self, *, user_email: str, folder: str = "inbox", limit: int = 25) -> list[MailboxMessageRef]:
+    def list_messages(
+        self,
+        *,
+        user_email: str,
+        folder: str = "inbox",
+        since: datetime | None = None,
+        limit: int = 25,
+    ) -> list[MailboxMessageRef]:
+        # When a token does arrive, this is one call:
+        #   GET {graph_base}/me/mailFolders/{folder}/messages
+        #       ?$filter=receivedDateTime ge {since:%Y-%m-%dT%H:%M:%SZ}
+        #       &$orderby=receivedDateTime desc&$top={limit}
+        raise self._unavailable()
+
+    def recent_threads(
+        self,
+        *,
+        user_email: str,
+        since: datetime,
+        limit: int = 40,
+    ) -> list[EmailThread]:
         raise self._unavailable()
 
     def get_thread(self, *, user_email: str, message_id: str) -> EmailThread:
@@ -240,18 +476,34 @@ class GraphMailConnector:
         raise self._unavailable()
 
 
+CONNECTORS: dict[str, Any] = {
+    "manual": ManualConnector,
+    "local_folder": LocalFolderConnector,
+    "graph": GraphMailConnector,
+}
+
+
+def configured_connector_name() -> str:
+    name = (settings.outlook_connector or "manual").strip().lower()
+    return name if name in CONNECTORS else "manual"
+
+
 def get_connector() -> MailConnector:
     """The connector this deployment is configured to use."""
-    if (settings.outlook_connector or "manual").strip().lower() == "graph":
-        return GraphMailConnector()
-    return ManualConnector()
+    return CONNECTORS[configured_connector_name()]()
+
+
+def can_read_mailbox() -> bool:
+    """True when a sweep can run without the user supplying files."""
+    return bool(get_connector().status().get("can_read_mailbox"))
 
 
 def connector_status() -> dict[str, Any]:
-    """Connector availability plus what the other connector would need."""
+    """Active connector availability, plus what each inactive one would need."""
     active = get_connector()
     status = active.status()
-    status["configured_connector"] = (settings.outlook_connector or "manual").strip().lower()
-    if active.name != "graph":
-        status["graph"] = GraphMailConnector().status()
+    status["configured_connector"] = configured_connector_name()
+    status["alternatives"] = [
+        CONNECTORS[name]().status() for name in CONNECTORS if name != active.name
+    ]
     return status

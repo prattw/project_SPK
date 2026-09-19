@@ -1,4 +1,6 @@
+from datetime import timezone, tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -99,7 +101,29 @@ class Settings(BaseSettings):
     email_scrub_pii: bool = True  # redact SSN/EDIPI/DOB/card numbers before the LLM sees the text
     email_library_top_k: int = 24  # retrieval budget when a reply cites the Document Library
 
-    outlook_connector: str = "manual"  # manual | graph
+    # --- Autonomous sweep ---
+    # Opening the Email Assistant reads the recent window, analyzes every message,
+    # and drafts replies/notes/invites for the user to review. It costs 1-2 model
+    # calls per message, so the message cap bounds both time and spend.
+    email_sweep_enabled: bool = True
+    email_sweep_hours: int = 72
+    email_sweep_max_messages: int = 40
+    email_sweep_max_hours: int = 336  # 14 days — ceiling on a user-supplied window
+    # Start a sweep automatically when the tab is opened, when the configured
+    # source can read mail without the user supplying files.
+    email_sweep_autostart: bool = True
+    # Interpreting "Thursday at 10" from an email needs a timezone. SPK is the
+    # Sacramento District, so Pacific matches both the users and the weekly report.
+    email_sweep_timezone: str = "America/Los_Angeles"
+    email_sweep_drafts: bool = True  # draft replies for mail that needs one
+    email_sweep_notes: bool = True  # write a note for the record
+    email_sweep_invites: bool = True  # build .ics appointments/invites
+
+    outlook_connector: str = "manual"  # manual | local_folder | graph
+    # Directory the local_folder connector reads .msg/.eml files from. This is the
+    # connector that makes an autonomous sweep possible with no cloud access: an
+    # Outlook rule or export drops recent mail here and Project SPK reads the files.
+    outlook_local_folder: str = ""
     outlook_graph_cloud: str = "gcchigh"  # commercial | gcc | gcchigh | dod
     outlook_tenant_id: str = ""
     outlook_client_id: str = ""
@@ -132,6 +156,14 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def sweep_tzinfo(self) -> tzinfo:
+        """Timezone used to resolve relative meeting times out of email text."""
+        try:
+            return ZoneInfo(self.email_sweep_timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            return timezone.utc
 
 
 settings = Settings()

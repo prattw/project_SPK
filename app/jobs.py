@@ -18,12 +18,16 @@ _jobs: dict[str, "Job"] = {}
 @dataclass
 class Job:
     id: str
-    kind: str  # ingest | query
+    kind: str  # ingest | query | library_ingest | email_sweep
     status: str = "queued"  # queued | running | done | error
     message: str = ""
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
+    # Set for jobs whose result contains the user's own content. /jobs/{id}
+    # refuses to return those to anyone else — an email sweep result holds
+    # message bodies, so it must not be readable by another signed-in user.
+    owner_email: str | None = None
     # ingest
     filename: str = ""
     pages_total: int = 0
@@ -41,6 +45,8 @@ class Job:
     query_email: str | None = None
     query_session_id: str | None = None
     query_question: str = ""
+    # email sweep
+    sweep_report: dict | None = None
 
     @property
     def elapsed_ms(self) -> int | None:
@@ -301,6 +307,177 @@ def start_background_library_ingest(*, purge_patterns: list[str] | None = None) 
         target=run_library_ingest_job,
         args=(job.id,),
         kwargs={"purge_patterns": purge_patterns},
+        daemon=True,
+    )
+    thread.start()
+    return job
+
+
+def create_email_sweep_job(*, owner_email: str | None) -> Job:
+    job = Job(id=str(uuid.uuid4()), kind="email_sweep", owner_email=owner_email)
+    with _lock:
+        _jobs[job.id] = job
+    return job
+
+
+def run_email_sweep_job(
+    job_id: str,
+    *,
+    user_email: str | None,
+    user_name: str = "",
+    hours: int | None = None,
+    threads: list[Any] | None = None,
+    source: str = "manual",
+    session_id: str | None = None,
+    sweep_kwargs: dict[str, Any] | None = None,
+) -> None:
+    """Sweep a window of email: collect, analyze, and build artifacts.
+
+    ``threads`` is supplied when the user uploaded the messages. When it is None
+    the configured mailbox connector is asked for the window instead, which is the
+    autonomous path.
+    """
+    from app.email_sweep import run_sweep, window_bounds
+    from app.outlook_connector import MailboxUnavailable, get_connector
+    from app.usage import record_email_usage
+
+    start_tracking()
+    try:
+        _update(
+            job_id,
+            status="running",
+            phase="collect",
+            started_at=time.time(),
+            message="Collecting recent email…",
+        )
+        since, _until, window_hours = window_bounds(hours)
+
+        if threads is None:
+            connector = get_connector()
+            threads = connector.recent_threads(
+                user_email=user_email or "",
+                since=since,
+                limit=_sweep_limit(),
+            )
+            source = connector.name
+
+        if not threads:
+            _update(
+                job_id,
+                status="done",
+                phase="done",
+                finished_at=time.time(),
+                files_total=0,
+                files_done=0,
+                message=f"No email found in the last {window_hours} hours.",
+                sweep_report={"empty": True, "window_hours": window_hours, "source": source},
+            )
+            return
+
+        _update(job_id, files_total=len(threads), message=f"Analyzing {len(threads)} message(s)…")
+
+        def on_progress(phase: str, done: int, total: int, detail: str) -> None:
+            label = "Drafting reply for" if phase == "draft" else "Analyzing"
+            _update(
+                job_id,
+                status="running",
+                phase=phase,
+                files_total=total,
+                files_done=done,
+                filename=detail,
+                message=(
+                    f"{label} message {min(done + 1, total)} of {total}…"
+                    if phase != "done"
+                    else "Finishing up…"
+                ),
+            )
+
+        report = run_sweep(
+            threads,
+            user_email=user_email,
+            user_name=user_name,
+            source=source,
+            hours=hours,
+            progress=on_progress,
+            **(sweep_kwargs or {}),
+        )
+        data = report.to_dict()
+        digest = data["digest"]
+        message = (
+            f"Swept {report.messages_analyzed} message(s) from the last {report.window_hours} hours: "
+            f"{digest['priority_counts'].get('high', 0)} high priority, "
+            f"{digest['replies_drafted']} reply draft(s), "
+            f"{digest['invites_built']} calendar invite(s)."
+        )
+        if report.messages_failed:
+            message += f" {report.messages_failed} message(s) could not be analyzed."
+        _update(
+            job_id,
+            status="done",
+            phase="done",
+            finished_at=time.time(),
+            files_total=report.messages_analyzed + report.messages_failed,
+            files_done=report.messages_analyzed + report.messages_failed,
+            warnings=report.warnings,
+            sweep_report=data,
+            message=message,
+        )
+    except MailboxUnavailable as exc:
+        _update(
+            job_id,
+            status="error",
+            phase="done",
+            finished_at=time.time(),
+            message=str(exc),
+            sweep_report={"requirements": exc.requirements},
+        )
+    except Exception as exc:  # noqa: BLE001 — surface to the client
+        _update(job_id, status="error", phase="done", finished_at=time.time(), message=str(exc))
+        record_error(
+            email=user_email,
+            session_id=session_id,
+            source="email",
+            message=str(exc),
+            detail="sweep",
+        )
+    finally:
+        record_email_usage(
+            email=user_email,
+            session_id=session_id,
+            action="sweep",
+            tokens=get_tracking(),
+        )
+
+
+def _sweep_limit() -> int:
+    from app.config import settings
+
+    return settings.email_sweep_max_messages
+
+
+def start_background_email_sweep(
+    *,
+    user_email: str | None,
+    user_name: str = "",
+    hours: int | None = None,
+    threads: list[Any] | None = None,
+    source: str = "manual",
+    session_id: str | None = None,
+    sweep_kwargs: dict[str, Any] | None = None,
+) -> Job:
+    job = create_email_sweep_job(owner_email=(user_email or "").lower() or None)
+    thread = threading.Thread(
+        target=run_email_sweep_job,
+        args=(job.id,),
+        kwargs={
+            "user_email": user_email,
+            "user_name": user_name,
+            "hours": hours,
+            "threads": threads,
+            "source": source,
+            "session_id": session_id,
+            "sweep_kwargs": sweep_kwargs,
+        },
         daemon=True,
     )
     thread.start()

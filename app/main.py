@@ -25,19 +25,33 @@ from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
 from app.email_assistant import DEFAULT_TONE, REPLY_TONES, analyze_thread, draft_reply
 from app.email_messages import (
+    SUPPORTED_MESSAGE_SUFFIXES,
     EmailThread,
     msg_support_available,
+    parse_message_file,
     parse_msg_file,
     parse_pasted_email,
 )
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
-from app.jobs import get_job, start_background_ingest, start_background_library_ingest, start_background_query
+from app.jobs import (
+    get_job,
+    start_background_email_sweep,
+    start_background_ingest,
+    start_background_library_ingest,
+    start_background_query,
+)
 from app.library_ingest import (
     extract_incoming_zip,
     library_incoming_path,
     save_incoming_upload,
 )
-from app.outlook_connector import connector_status
+from app.llm import model_endpoint_info
+from app.outlook_connector import (
+    MailboxUnavailable,
+    can_read_mailbox,
+    connector_status,
+    get_connector,
+)
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
 from app.token_usage import get_tracking, start_tracking
@@ -127,6 +141,7 @@ class JobStatusResponse(BaseModel):
     elapsed_ms: int | None = None
     result: QueryResponse | None = None
     library_report: dict | None = None
+    sweep_report: dict | None = None
 
 
 class LibraryIngestRequest(BaseModel):
@@ -492,6 +507,10 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
+    # An email sweep result contains message bodies. 404 rather than 403 for
+    # someone else's job, so job ids are not confirmable by probing.
+    if job.owner_email and job.owner_email != (authenticated_email(request) or "").lower():
+        raise HTTPException(status_code=404, detail="Job not found.")
     result = None
     if job.kind == "query" and job.result:
         result = QueryResponse(**job.result)
@@ -511,6 +530,7 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
         elapsed_ms=job.elapsed_ms,
         result=result,
         library_report=job.library_report,
+        sweep_report=job.sweep_report,
     )
 
 
@@ -581,8 +601,229 @@ def email_status(request: Request) -> dict:
         "scrub_pii": settings.email_scrub_pii,
         "max_chars": settings.email_max_chars,
         "msg_upload_supported": msg_support_available(),
+        "upload_suffixes": list(SUPPORTED_MESSAGE_SUFFIXES),
         "tones": [{"key": key, "description": value} for key, value in REPLY_TONES.items()],
         "mailbox": connector_status(),
+        "model": model_endpoint_info(),
+        "sweep": {
+            "enabled": settings.email_sweep_enabled,
+            "window_hours": settings.email_sweep_hours,
+            "max_window_hours": settings.email_sweep_max_hours,
+            "max_messages": settings.email_sweep_max_messages,
+            # The UI only auto-starts when the source needs no files from the user.
+            "autostart": settings.email_sweep_autostart and can_read_mailbox(),
+            "can_read_mailbox": can_read_mailbox(),
+            "timezone": settings.email_sweep_timezone,
+            "drafts": settings.email_sweep_drafts,
+            "notes": settings.email_sweep_notes,
+            "invites": settings.email_sweep_invites,
+        },
+    }
+
+
+class EmailSweepRequest(BaseModel):
+    hours: int | None = Field(
+        default=None, ge=1, le=336, description="How far back to sweep. Defaults to EMAIL_SWEEP_HOURS (72)."
+    )
+    draft_replies: bool | None = Field(default=None, description="Draft replies for mail that needs one")
+    write_notes: bool | None = Field(default=None, description="Write a note for the record per message")
+    build_invites: bool | None = Field(default=None, description="Build .ics appointments and invites")
+    tone: str = Field(default=DEFAULT_TONE, max_length=32)
+    use_library: bool = Field(default=False, description="Ground reply drafts in the Document Library")
+    session_id: str | None = Field(default=None, max_length=64)
+
+    def sweep_kwargs(self) -> dict:
+        return {
+            "draft_replies": self.draft_replies,
+            "write_notes": self.write_notes,
+            "build_invites": self.build_invites,
+            "tone": self.tone,
+            "use_library": self.use_library,
+        }
+
+
+def _require_email_sweep() -> None:
+    _require_email_assistant()
+    if not settings.email_sweep_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="The autonomous email sweep is disabled on this deployment (set EMAIL_SWEEP_ENABLED=true).",
+        )
+
+
+@app.post("/email/sweep", response_model=QueryJobResponse)
+def email_sweep(request: Request, body: EmailSweepRequest) -> QueryJobResponse:
+    """Sweep the configured mail source for the recent window and prepare the work.
+
+    Reads every message received in the window, analyzes it, and drafts the
+    replies, notes, and calendar invites it calls for. Returns a job id; poll
+    ``GET /jobs/{job_id}`` for progress and the report.
+
+    Requires a source that can enumerate mail on its own — the ``local_folder``
+    connector, or Graph once provisioned. With the default ``manual`` connector
+    there is no mailbox to read, so this returns 503 with the setup steps and the
+    client should use ``POST /email/sweep/upload`` instead.
+    """
+    require_api_key(request)
+    _require_email_sweep()
+    _require_keys()
+    email = authenticated_email(request)
+
+    if not can_read_mailbox():
+        status = connector_status()
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": (
+                    "Project SPK has no mail source it can read on its own, so it cannot sweep "
+                    "automatically. Drag the last few days of email out of Outlook instead, or "
+                    "configure a local mail folder."
+                ),
+                "requirements": status.get("requirements") or [],
+                "connector": status.get("connector"),
+            },
+        )
+
+    job = start_background_email_sweep(
+        user_email=email,
+        hours=body.hours,
+        session_id=body.session_id,
+        sweep_kwargs=body.sweep_kwargs(),
+    )
+    return QueryJobResponse(
+        job_id=job.id,
+        status=job.status,
+        message="Email sweep started. Poll GET /jobs/{job_id} for progress.",
+    )
+
+
+@app.post("/email/sweep/upload", response_model=QueryJobResponse)
+async def email_sweep_upload(
+    request: Request,
+    files: list[UploadFile] = File(..., description=".msg or .eml files to sweep"),
+    hours: int = Form(default=0, description="Window in hours; 0 uses the default"),
+    draft_replies: bool = Form(default=True),
+    write_notes: bool = Form(default=True),
+    build_invites: bool = Form(default=True),
+    tone: str = Form(default=DEFAULT_TONE),
+    use_library: bool = Form(default=False),
+    session_id: str | None = Form(default=None),
+) -> QueryJobResponse:
+    """Sweep a batch of messages the user dragged out of Outlook.
+
+    The path that needs no IT approvals: multi-select the last few days in
+    Outlook, drag them in, and the same analysis runs over the batch. Files are
+    parsed in a temp directory that is deleted before the job starts, and email
+    content is never written to the document index.
+    """
+    require_api_key(request)
+    _require_email_sweep()
+    _require_keys()
+    email = authenticated_email(request)
+
+    if not files:
+        raise HTTPException(status_code=400, detail="Select at least one .msg or .eml file.")
+    limit = settings.email_sweep_max_messages
+    if len(files) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"That is {len(files)} files, over the {limit}-message limit for one sweep. "
+                "Select fewer messages or raise EMAIL_SWEEP_MAX_MESSAGES."
+            ),
+        )
+
+    threads: list[EmailThread] = []
+    warnings: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for upload in files:
+            name = Path(upload.filename or "").name
+            suffix = Path(name).suffix.lower()
+            if suffix not in SUPPORTED_MESSAGE_SUFFIXES:
+                warnings.append(f"{name or 'file'}: not a .msg or .eml file.")
+                continue
+            if suffix == ".msg" and not msg_support_available():
+                warnings.append(f"{name}: reading .msg needs the 'extract-msg' package on the server.")
+                continue
+            data = await upload.read()
+            if not data:
+                warnings.append(f"{name}: empty file.")
+                continue
+            if len(data) > settings.max_upload_bytes:
+                warnings.append(f"{name}: too large.")
+                continue
+            path = Path(tmp) / name
+            path.write_bytes(data)
+            try:
+                thread = await run_in_threadpool(
+                    parse_message_file, path, scrub=settings.email_scrub_pii
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad file should not fail the batch
+                warnings.append(f"{name}: could not be read ({exc}).")
+                continue
+            threads.append(thread)
+
+    if not threads:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "None of those files could be read as email.",
+                "warnings": warnings,
+            },
+        )
+
+    job = start_background_email_sweep(
+        user_email=email,
+        # An uploaded batch is the user's explicit selection, so the window only
+        # filters it — it does not go looking for anything else.
+        hours=hours or settings.email_sweep_max_hours,
+        threads=threads,
+        source="upload",
+        session_id=session_id,
+        sweep_kwargs={
+            "draft_replies": draft_replies,
+            "write_notes": write_notes,
+            "build_invites": build_invites,
+            "tone": tone,
+            "use_library": use_library,
+        },
+    )
+    return QueryJobResponse(
+        job_id=job.id,
+        status=job.status,
+        message=(
+            f"Sweeping {len(threads)} message(s). Poll GET /jobs/{{job_id}} for progress."
+            + (f" {len(warnings)} file(s) skipped." if warnings else "")
+        ),
+    )
+
+
+@app.get("/email/mailbox/messages")
+def email_mailbox_messages(request: Request, hours: int = 0, limit: int = 25) -> dict:
+    """Preview what a sweep would read, without running any model calls."""
+    require_api_key(request)
+    _require_email_assistant()
+
+    from app.email_sweep import window_bounds
+
+    since, _until, window_hours = window_bounds(hours or None)
+    try:
+        refs = get_connector().list_messages(
+            user_email=authenticated_email(request) or "",
+            since=since,
+            limit=max(1, min(limit, settings.email_sweep_max_messages)),
+        )
+    except MailboxUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"message": str(exc), "requirements": exc.requirements},
+        ) from exc
+
+    return {
+        "window_hours": window_hours,
+        "since": since.isoformat(),
+        "count": len(refs),
+        "messages": [vars(ref) for ref in refs],
     }
 
 
