@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.7" />
+  <link rel="stylesheet" href="/static/style.css?v=0.10.0" />
 </head>
 <body>
   <!-- Email login gate (first screen) -->
@@ -2043,20 +2043,64 @@
             <h2>Email Assistant</h2>
           </div>
           <p class="docs-desc">
-            Summarize an Outlook email thread, see what it asks of you, and get a reply draft
-            you review and send yourself.
+            Reads your recent email, works out what each message needs, and prepares the
+            replies, notes, and calendar invites — for you to review and send yourself.
           </p>
 
           <div class="email-notice" role="note">
-            <strong>Before you paste:</strong> email text is sent to the AI model to be processed,
-            the same way uploaded documents are. Do not paste classified material. For CUI,
-            PII, procurement-sensitive, or attorney-client content, follow your organization's
-            policy on AI tools first. Obvious identifiers (SSN, EDIPI, date of birth, card
-            numbers) are redacted automatically, but that is not a substitute for your own review.
-            Project SPK never sends email on your behalf.
+            <strong>Before you use this:</strong> email text is sent to the AI model to be
+            processed, the same way uploaded documents are. Do not use it for classified
+            material. For CUI, PII, procurement-sensitive, or attorney-client content, follow
+            your organization's policy on AI tools first. Obvious identifiers (SSN, EDIPI, date
+            of birth, card numbers) are redacted automatically, but that is not a substitute for
+            your own review. <strong>Project SPK never sends email and never writes to your
+            calendar</strong> — every draft and invite is a file you open, check, and act on.
           </div>
 
+          <div id="emailModelNotice" class="email-model-notice" hidden></div>
           <div id="emailMailboxStatus" class="email-mailbox" hidden></div>
+
+          <!-- Autonomous sweep -->
+          <section class="email-sweep" id="emailSweep">
+            <div class="email-sweep-head">
+              <div class="email-sweep-heading">
+                <h3 class="email-sweep-title">
+                  Your last <span id="emailSweepWindow">72</span> hours
+                </h3>
+                <p class="email-sweep-desc" id="emailSweepDesc">
+                  Every message in the window gets read, triaged, and turned into a draft reply,
+                  a note for the record, and an appointment where one is called for.
+                </p>
+              </div>
+              <div class="email-sweep-actions">
+                <button type="button" id="emailSweepBtn" class="email-btn email-btn-primary">
+                  Run the sweep
+                </button>
+                <label class="email-btn email-sweep-pick">
+                  <input type="file" id="emailSweepFiles" accept=".msg,.eml" multiple hidden />
+                  Choose email files
+                </label>
+              </div>
+            </div>
+
+            <div id="emailSweepSource" class="email-sweep-source" hidden></div>
+            <div id="emailSweepStatus" class="email-status" hidden></div>
+
+            <div id="emailSweepProgress" class="email-sweep-progress" hidden>
+              <div class="email-sweep-bar"><div class="email-sweep-bar-fill" id="emailSweepBarFill"></div></div>
+              <p class="email-sweep-progress-text" id="emailSweepProgressText"></p>
+            </div>
+
+            <div id="emailSweepDigest" class="email-sweep-digest" hidden></div>
+            <div id="emailSweepResults" class="email-sweep-results"></div>
+          </section>
+
+          <details class="email-single" id="emailSingle">
+            <summary class="email-single-summary">Work on one email instead</summary>
+            <p class="email-single-desc">
+              Paste a single thread to summarize it or draft one reply, without sweeping the
+              whole window.
+            </p>
 
           <div class="email-input-head">
             <label class="email-label" for="emailText">Paste the email thread from Outlook</label>
@@ -2106,6 +2150,7 @@
 
           <div id="emailStatus" class="email-status" hidden></div>
           <div id="emailResults" class="email-results"></div>
+          </details>
         </div>
       </section>
     </main>
@@ -2155,6 +2200,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.7"></script>
+  <script src="/static/app.js?v=0.10.0"></script>
 </body>
 </html>

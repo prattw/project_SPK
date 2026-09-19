@@ -51,6 +51,7 @@ from app.outlook_connector import (
     can_read_mailbox,
     connector_status,
     get_connector,
+    mailbox_setup_requirements,
 )
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
@@ -249,7 +250,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.9.1",
+    version="0.10.0",
     lifespan=lifespan,
 )
 
@@ -670,17 +671,16 @@ def email_sweep(request: Request, body: EmailSweepRequest) -> QueryJobResponse:
     email = authenticated_email(request)
 
     if not can_read_mailbox():
-        status = connector_status()
         raise HTTPException(
             status_code=503,
             detail={
                 "message": (
                     "Project SPK has no mail source it can read on its own, so it cannot sweep "
-                    "automatically. Drag the last few days of email out of Outlook instead, or "
-                    "configure a local mail folder."
+                    "automatically. Drag the last few days of email out of Outlook and use "
+                    "'Choose email files' instead, or configure a local mail folder."
                 ),
-                "requirements": status.get("requirements") or [],
-                "connector": status.get("connector"),
+                "requirements": mailbox_setup_requirements(),
+                "connector": connector_status().get("connector"),
             },
         )
 

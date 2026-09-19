@@ -1625,12 +1625,16 @@ function wireEmailCopyButton() {
 }
 
 async function loadEmailStatus() {
-  if (emailStatusLoaded) return;
+  if (emailStatusLoaded) {
+    maybeAutostartSweep();
+    return;
+  }
   try {
     const res = await apiFetch("/email/status");
     const data = await readJsonResponse(res);
     if (!res.ok) return;
     emailStatusLoaded = true;
+    applySweepConfig(data);
 
     if (emailToneEl && !emailToneEl.options.length) {
       (data.tones || []).forEach((tone) => {
@@ -1648,7 +1652,11 @@ async function loadEmailStatus() {
 
     const mailbox = data.mailbox || {};
     if (emailMailboxEl) {
-      const graph = mailbox.graph || (mailbox.connector === "graph" ? mailbox : null);
+      const alternatives = mailbox.alternatives || [];
+      const graph =
+        mailbox.connector === "graph"
+          ? mailbox
+          : alternatives.find((alt) => alt.connector === "graph");
       const requirements = (graph && graph.requirements) || [];
       emailMailboxEl.hidden = false;
       emailMailboxEl.innerHTML =
@@ -1667,8 +1675,17 @@ async function loadEmailStatus() {
         "The email assistant is disabled on this deployment. Set EMAIL_ASSISTANT_ENABLED=true to turn it on.",
         "error"
       );
-      [emailAnalyzeBtn, emailDraftBtn].forEach((el) => el && (el.disabled = true));
+      setSweepStatus(
+        "The email assistant is disabled on this deployment. Set EMAIL_ASSISTANT_ENABLED=true to turn it on.",
+        "error"
+      );
+      [emailAnalyzeBtn, emailDraftBtn, emailSweepBtn, emailSweepFilesInput].forEach(
+        (el) => el && (el.disabled = true)
+      );
+      return;
     }
+
+    maybeAutostartSweep();
   } catch {
     /* status is informational — the actions report their own errors */
   }
@@ -1774,6 +1791,482 @@ async function handleEmailMsgUpload(input) {
   }
 }
 
+/* ---------- Autonomous sweep ---------- */
+
+const emailSweepBtn = document.getElementById("emailSweepBtn");
+const emailSweepFilesInput = document.getElementById("emailSweepFiles");
+const emailSweepWindowEl = document.getElementById("emailSweepWindow");
+const emailSweepSourceEl = document.getElementById("emailSweepSource");
+const emailSweepStatusEl = document.getElementById("emailSweepStatus");
+const emailSweepProgressEl = document.getElementById("emailSweepProgress");
+const emailSweepBarFillEl = document.getElementById("emailSweepBarFill");
+const emailSweepProgressTextEl = document.getElementById("emailSweepProgressText");
+const emailSweepDigestEl = document.getElementById("emailSweepDigest");
+const emailSweepResultsEl = document.getElementById("emailSweepResults");
+const emailModelNoticeEl = document.getElementById("emailModelNotice");
+
+const SWEEP_POLL_MS = 2000;
+
+// Artifact bodies (.eml/.ics/.md) stay in memory and are saved by the browser on
+// demand. Nothing is written to disk on the server, so email content lives only
+// as long as this page does.
+let sweepArtifacts = [];
+let sweepConfig = { windowHours: 72, canReadMailbox: false, autostart: false, maxMessages: 40 };
+let sweepRunning = false;
+let sweepAutostarted = false;
+
+function setSweepStatus(message, kind = "info") {
+  if (!emailSweepStatusEl) return;
+  if (!message) {
+    emailSweepStatusEl.hidden = true;
+    emailSweepStatusEl.textContent = "";
+    return;
+  }
+  emailSweepStatusEl.hidden = false;
+  emailSweepStatusEl.className = `email-status email-status-${kind}`;
+  emailSweepStatusEl.textContent = message;
+}
+
+function setSweepRunning(running) {
+  sweepRunning = running;
+  if (emailSweepBtn) {
+    emailSweepBtn.disabled = running || !sweepConfig.canReadMailbox;
+    emailSweepBtn.textContent = running ? "Sweeping…" : "Run the sweep";
+  }
+  if (emailSweepFilesInput) emailSweepFilesInput.disabled = running;
+  if (emailSweepProgressEl) emailSweepProgressEl.hidden = !running;
+}
+
+function renderSweepProgress(job) {
+  if (!emailSweepProgressEl) return;
+  const total = job.files_total || 0;
+  const done = job.files_done || 0;
+  const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  emailSweepProgressEl.hidden = false;
+  if (emailSweepBarFillEl) emailSweepBarFillEl.style.width = `${pct}%`;
+  if (emailSweepProgressTextEl) {
+    const detail = job.filename ? ` — ${job.filename}` : "";
+    emailSweepProgressTextEl.textContent = `${job.message || "Working…"}${detail}`;
+  }
+}
+
+function sweepArtifactButtons(artifacts, itemIndex) {
+  const buttons = (artifacts || [])
+    .map((artifact, position) => {
+      if (artifact.kind === "invite_error") return "";
+      const index = sweepArtifacts.length;
+      sweepArtifacts.push(artifact);
+      const verb =
+        artifact.kind === "reply"
+          ? "Open in Outlook"
+          : artifact.kind === "invite"
+            ? "Add to calendar"
+            : "Save note";
+      return (
+        `<button type="button" class="email-artifact-btn" data-sweep-download="${index}" ` +
+        `title="${escapeHtml(artifact.filename)}">${escapeHtml(verb)}` +
+        `<span class="email-artifact-ext">${escapeHtml(
+          (artifact.filename.match(/\.[a-z]+$/i) || [""])[0]
+        )}</span></button>` +
+        `<button type="button" class="email-artifact-btn email-artifact-btn-quiet" ` +
+        `data-sweep-copy="${index}">Copy</button>`
+      );
+    })
+    .filter(Boolean)
+    .join("");
+  return buttons ? `<div class="email-artifact-row" data-item="${itemIndex}">${buttons}</div>` : "";
+}
+
+function renderSweepMeeting(meeting) {
+  if (!meeting) return "";
+  const when = meeting.start
+    ? new Date(meeting.start).toLocaleString([], {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "";
+  const rows = [
+    ["When", when || "no time proposed in the email — you pick one"],
+    ["Where", meeting.location],
+    ["Invite", (meeting.attendees || []).join(", ")],
+  ].filter(([, value]) => value);
+
+  return (
+    `<div class="email-block email-block-meeting">` +
+    `<h4 class="email-sub">${escapeHtml(
+      meeting.attendees && meeting.attendees.length ? "Meeting invite" : "Appointment"
+    )}: ${escapeHtml(meeting.title || "")}</h4>` +
+    rows
+      .map(
+        ([label, value]) =>
+          `<div class="email-meta-row"><span class="email-meta-label">${escapeHtml(label)}</span>` +
+          `<span class="email-meta-value">${escapeHtml(value)}</span></div>`
+      )
+      .join("") +
+    (meeting.reason ? `<p class="email-reason">${escapeHtml(meeting.reason)}</p>` : "") +
+    renderEmailList("Agenda", meeting.agenda) +
+    (meeting.time_known
+      ? ""
+      : `<p class="email-draft-warning">No specific time was stated, so there is no calendar file to add — schedule it yourself using the agenda above.</p>`) +
+    `</div>`
+  );
+}
+
+function renderSweepDraft(draft) {
+  if (!draft) return "";
+  return (
+    `<div class="email-block email-block-draft">` +
+    `<h4 class="email-sub">Draft reply</h4>` +
+    (draft.subject ? `<div class="email-draft-subject">${escapeHtml(draft.subject)}</div>` : "") +
+    `<div class="email-draft-body">${escapeHtml(draft.body || "")}</div>` +
+    (draft.library_error ? `<p class="email-draft-warning">${escapeHtml(draft.library_error)}</p>` : "") +
+    `</div>`
+  );
+}
+
+function renderSweepNote(note) {
+  if (!note) return "";
+  return (
+    `<div class="email-block email-block-note">` +
+    `<h4 class="email-sub">Note for the record: ${escapeHtml(note.title || "")}</h4>` +
+    (note.body ? `<p class="email-summary">${escapeHtml(note.body)}</p>` : "") +
+    renderEmailList("Decisions", note.decisions) +
+    renderEmailList("Follow up on", note.followups) +
+    `</div>`
+  );
+}
+
+function sweepReceivedLabel(info) {
+  if (info.received_at) {
+    const when = new Date(info.received_at);
+    if (!Number.isNaN(when.getTime())) {
+      return when.toLocaleString([], {
+        weekday: "short",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+    }
+  }
+  return info.sent || "";
+}
+
+function renderSweepItem(item, index) {
+  const info = item.email || {};
+  const analysis = item.analysis || {};
+  const priority = (analysis.priority || "medium").toLowerCase();
+  const subject = info.subject || "(no subject)";
+
+  if (item.error && !analysis.summary) {
+    return (
+      `<article class="email-item email-item-failed">` +
+      `<h4 class="email-item-subject">${escapeHtml(subject)}</h4>` +
+      `<p class="email-draft-warning">${escapeHtml(item.error)}</p>` +
+      `</article>`
+    );
+  }
+
+  const badges = [
+    `<span class="email-badge email-badge-${escapeHtml(priority)}">${escapeHtml(priority)}</span>`,
+    analysis.category ? `<span class="email-badge">${escapeHtml(analysis.category)}</span>` : "",
+    analysis.reply_needed ? `<span class="email-badge email-badge-reply">reply needed</span>` : "",
+    item.meeting ? `<span class="email-badge email-badge-meeting">meeting</span>` : "",
+  ]
+    .filter(Boolean)
+    .join("");
+
+  // High-priority mail opens expanded; everything else stays collapsed so the
+  // window reads as a list you scan rather than a wall of text.
+  const open = priority === "high" ? " open" : "";
+  return (
+    `<details class="email-item email-item-${escapeHtml(priority)}"${open}>` +
+    `<summary class="email-item-head">` +
+    `<span class="email-item-main">` +
+    `<span class="email-item-subject">${escapeHtml(subject)}</span>` +
+    `<span class="email-item-from">${escapeHtml(info.sender || "unknown sender")}` +
+    (sweepReceivedLabel(info) ? ` · ${escapeHtml(sweepReceivedLabel(info))}` : "") +
+    `</span></span>` +
+    `<span class="email-item-badges">${badges}</span>` +
+    `</summary>` +
+    `<div class="email-item-body">` +
+    (analysis.summary ? `<p class="email-summary">${escapeHtml(analysis.summary)}</p>` : "") +
+    (analysis.priority_reason ? `<p class="email-reason">${escapeHtml(analysis.priority_reason)}</p>` : "") +
+    renderEmailActionItems(analysis.action_items) +
+    renderEmailList("Deadlines", analysis.deadlines) +
+    renderEmailList("Open questions", analysis.open_questions) +
+    (analysis.suggested_next_step
+      ? `<h4 class="email-sub">Suggested next step</h4><p class="email-next">${escapeHtml(
+          analysis.suggested_next_step
+        )}</p>`
+      : "") +
+    renderSweepDraft(item.draft) +
+    renderSweepMeeting(item.meeting) +
+    renderSweepNote(item.note) +
+    sweepArtifactButtons(item.artifacts, index) +
+    (item.error ? `<p class="email-draft-warning">${escapeHtml(item.error)}</p>` : "") +
+    (emailRedactionNote(info) ? `<p class="email-redaction">${escapeHtml(emailRedactionNote(info))}</p>` : "") +
+    `</div></details>`
+  );
+}
+
+function renderSweepDigest(report) {
+  const digest = report.digest || {};
+  const counts = digest.priority_counts || {};
+  const tiles = [
+    ["High priority", counts.high || 0, "high"],
+    ["Replies drafted", digest.replies_drafted || 0, ""],
+    ["Invites ready", digest.invites_built || 0, ""],
+    ["Notes written", digest.notes_written || 0, ""],
+  ];
+
+  const deadlines = (digest.deadlines || [])
+    .map(
+      (d) =>
+        `<li><strong>${escapeHtml(d.deadline)}</strong> — ${escapeHtml(d.subject)}</li>`
+    )
+    .join("");
+  const owed = (digest.needs_reply || [])
+    .map((r) => `<li>${escapeHtml(r.subject)} — ${escapeHtml(r.sender || "")}</li>`)
+    .join("");
+
+  return (
+    `<div class="email-digest-tiles">` +
+    tiles
+      .map(
+        ([label, value, tone]) =>
+          `<div class="email-digest-tile${tone ? ` email-digest-tile-${tone}` : ""}">` +
+          `<span class="email-digest-value">${value}</span>` +
+          `<span class="email-digest-label">${escapeHtml(label)}</span></div>`
+      )
+      .join("") +
+    `</div>` +
+    `<p class="email-digest-line">Read ${report.messages_analyzed} message(s) received in the last ` +
+    `${report.window_hours} hours.` +
+    (report.messages_failed ? ` ${report.messages_failed} could not be analyzed.` : "") +
+    `</p>` +
+    (deadlines ? `<div class="email-digest-col"><h4 class="email-sub">Dates across the window</h4><ul class="email-ul">${deadlines}</ul></div>` : "") +
+    (owed ? `<div class="email-digest-col"><h4 class="email-sub">Waiting on a reply from you</h4><ul class="email-ul">${owed}</ul></div>` : "") +
+    ((report.warnings || []).length
+      ? `<ul class="email-ul email-digest-warnings">${report.warnings
+          .map((w) => `<li>${escapeHtml(w)}</li>`)
+          .join("")}</ul>`
+      : "")
+  );
+}
+
+function renderSweepReport(report) {
+  sweepArtifacts = [];
+  if (!report || report.empty || !(report.items || []).length) {
+    if (emailSweepDigestEl) emailSweepDigestEl.hidden = true;
+    if (emailSweepResultsEl) emailSweepResultsEl.innerHTML = "";
+    return;
+  }
+  if (emailSweepResultsEl) {
+    emailSweepResultsEl.innerHTML = report.items
+      .map((item, index) => renderSweepItem(item, index))
+      .join("");
+  }
+  if (emailSweepDigestEl) {
+    emailSweepDigestEl.hidden = false;
+    emailSweepDigestEl.innerHTML = renderSweepDigest(report);
+  }
+}
+
+function downloadSweepArtifact(artifact) {
+  const blob = new Blob([artifact.content], { type: `${artifact.mime || "text/plain"};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = artifact.filename || "project-spk.txt";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function copySweepArtifact(artifact, button) {
+  const original = button.textContent;
+  try {
+    await navigator.clipboard.writeText(artifact.content || "");
+    button.textContent = "Copied";
+  } catch {
+    button.textContent = "Copy blocked";
+  }
+  setTimeout(() => (button.textContent = original), 1500);
+}
+
+function sweepRequirementsText(detail) {
+  if (typeof detail === "string") return detail;
+  if (!detail || typeof detail !== "object") return "";
+  const parts = [detail.message || ""];
+  (detail.requirements || []).forEach((req) => parts.push(`• ${req}`));
+  (detail.warnings || []).forEach((warn) => parts.push(`• ${warn}`));
+  return parts.filter(Boolean).join("\n");
+}
+
+async function pollSweepJob(jobId) {
+  while (sweepRunning) {
+    await new Promise((resolve) => setTimeout(resolve, SWEEP_POLL_MS));
+    let job;
+    try {
+      const res = await apiFetch(`/jobs/${encodeURIComponent(jobId)}`);
+      job = await readJsonResponse(res);
+      if (!res.ok) throw new Error(emailErrorText(job.detail, "Lost track of the sweep."));
+    } catch (err) {
+      setSweepStatus(err.message || "Lost track of the sweep.", "error");
+      return;
+    }
+
+    renderSweepProgress(job);
+    if (job.status === "done") {
+      renderSweepReport(job.sweep_report);
+      setSweepStatus(job.message || "Sweep complete.", "ok");
+      return;
+    }
+    if (job.status === "error") {
+      const requirements = (job.sweep_report && job.sweep_report.requirements) || [];
+      setSweepStatus(
+        [job.message, ...requirements.map((r) => `• ${r}`)].filter(Boolean).join("\n"),
+        "error"
+      );
+      return;
+    }
+  }
+}
+
+async function startSweep(url, body) {
+  if (sweepRunning) return;
+  setSweepStatus("");
+  if (emailSweepBarFillEl) emailSweepBarFillEl.style.width = "0%";
+  if (emailSweepProgressTextEl) emailSweepProgressTextEl.textContent = "Collecting recent email…";
+  setSweepRunning(true);
+  try {
+    const res = await apiFetch(url, body);
+    const data = await readJsonResponse(res);
+    if (!res.ok) {
+      throw new Error(sweepRequirementsText(data.detail) || "Could not start the sweep.");
+    }
+    await pollSweepJob(data.job_id);
+  } catch (err) {
+    setSweepStatus(err.message || "Could not start the sweep.", "error");
+  } finally {
+    setSweepRunning(false);
+  }
+}
+
+function runMailboxSweep() {
+  return startSweep("/email/sweep", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      use_library: !!emailUseLibraryEl?.checked,
+      tone: emailToneEl?.value || "professional",
+      session_id: currentSessionId,
+    }),
+  });
+}
+
+function runUploadSweep(files) {
+  const form = new FormData();
+  Array.from(files)
+    .slice(0, sweepConfig.maxMessages)
+    .forEach((file) => form.append("files", file));
+  form.append("tone", emailToneEl?.value || "professional");
+  form.append("use_library", String(!!emailUseLibraryEl?.checked));
+  if (currentSessionId) form.append("session_id", currentSessionId);
+  return startSweep("/email/sweep/upload", { method: "POST", body: form });
+}
+
+function describeSweepSource(data) {
+  const sweep = data.sweep || {};
+  const mailbox = data.mailbox || {};
+  if (!emailSweepSourceEl) return;
+  emailSweepSourceEl.hidden = false;
+  if (sweep.can_read_mailbox) {
+    emailSweepSourceEl.innerHTML =
+      `<strong>Reading from:</strong> ${escapeHtml(mailbox.description || mailbox.connector || "")}`;
+    return;
+  }
+  emailSweepSourceEl.innerHTML =
+    `<strong>No mailbox connection.</strong> Project SPK cannot reach your mail on its own yet, ` +
+    `so pick the messages yourself: in Outlook, select the last few days, drag them into a ` +
+    `folder on your desktop to save them as <code>.msg</code> files, then choose them with ` +
+    `"Choose email files". Everything else works the same.`;
+}
+
+function describeModelEndpoint(model) {
+  if (!emailModelNoticeEl || !model) return;
+  emailModelNoticeEl.hidden = false;
+  if (model.public_openai) {
+    emailModelNoticeEl.className = "email-model-notice email-model-notice-warn";
+    emailModelNoticeEl.innerHTML =
+      `<strong>Email is processed by ${escapeHtml(String(model.endpoint_host))}</strong> ` +
+      `(model ${escapeHtml(String(model.model))}), a commercial API on the public internet. ` +
+      `Keep CUI and PII out of it until a self-hosted model is configured.`;
+  } else {
+    emailModelNoticeEl.className = "email-model-notice email-model-notice-ok";
+    emailModelNoticeEl.innerHTML =
+      `<strong>Email is processed by ${escapeHtml(String(model.endpoint_host))}</strong> ` +
+      `(model ${escapeHtml(String(model.model))}), a self-hosted endpoint. Content does not ` +
+      `go to a commercial AI service.`;
+  }
+}
+
+function applySweepConfig(data) {
+  const sweep = data.sweep || {};
+  sweepConfig = {
+    windowHours: sweep.window_hours || 72,
+    canReadMailbox: !!sweep.can_read_mailbox,
+    autostart: !!sweep.autostart,
+    maxMessages: sweep.max_messages || 40,
+  };
+  if (emailSweepWindowEl) emailSweepWindowEl.textContent = String(sweepConfig.windowHours);
+  if (emailSweepBtn) {
+    emailSweepBtn.disabled = !sweepConfig.canReadMailbox;
+    emailSweepBtn.title = sweepConfig.canReadMailbox
+      ? `Read everything received in the last ${sweepConfig.windowHours} hours`
+      : "Project SPK has no mail source it can read on its own — choose email files instead";
+  }
+  if (sweep.enabled === false) {
+    document.getElementById("emailSweep")?.setAttribute("hidden", "hidden");
+  }
+  describeSweepSource(data);
+  describeModelEndpoint(data.model);
+}
+
+/** Start a sweep on first open, when the source needs nothing from the user. */
+function maybeAutostartSweep() {
+  if (sweepAutostarted || sweepRunning) return;
+  if (!sweepConfig.autostart || !sweepConfig.canReadMailbox) return;
+  sweepAutostarted = true;
+  runMailboxSweep();
+}
+
+function initEmailSweep() {
+  emailSweepBtn?.addEventListener("click", () => runMailboxSweep());
+  emailSweepFilesInput?.addEventListener("change", () => {
+    const files = emailSweepFilesInput.files;
+    if (files && files.length) runUploadSweep(files);
+    emailSweepFilesInput.value = "";
+  });
+
+  emailSweepResultsEl?.addEventListener("click", (event) => {
+    const downloadBtn = event.target.closest("[data-sweep-download]");
+    if (downloadBtn) {
+      const artifact = sweepArtifacts[Number(downloadBtn.dataset.sweepDownload)];
+      if (artifact) downloadSweepArtifact(artifact);
+      return;
+    }
+    const copyBtn = event.target.closest("[data-sweep-copy]");
+    if (copyBtn) {
+      const artifact = sweepArtifacts[Number(copyBtn.dataset.sweepCopy)];
+      if (artifact) copySweepArtifact(artifact, copyBtn);
+    }
+  });
+}
+
 function initEmailAssistant() {
   emailAnalyzeBtn?.addEventListener("click", runEmailAnalyze);
   emailDraftBtn?.addEventListener("click", runEmailDraft);
@@ -1786,6 +2279,7 @@ function initEmailAssistant() {
     setEmailStatus("");
     emailTextEl?.focus();
   });
+  initEmailSweep();
 }
 
 /* ---------- Init ---------- */

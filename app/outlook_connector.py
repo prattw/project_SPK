@@ -498,6 +498,34 @@ def can_read_mailbox() -> bool:
     return bool(get_connector().status().get("can_read_mailbox"))
 
 
+def mailbox_setup_requirements() -> list[str]:
+    """What this deployment would need before a sweep could run unattended.
+
+    The active connector's own unmet requirements come first, then the options a
+    different connector would open up. With the default ``manual`` connector
+    nothing is broken — there is simply no mailbox — so the answer is the two
+    routes to getting one, cheapest first.
+    """
+    active = get_connector()
+    status = active.status()
+    if status.get("can_read_mailbox"):
+        return []
+
+    requirements = list(status.get("requirements") or [])
+    if active.name == "manual":
+        requirements.append(
+            "Set OUTLOOK_CONNECTOR=local_folder and OUTLOOK_LOCAL_FOLDER to a directory that "
+            "recent .msg/.eml files are exported into. This needs no cloud access, no tenant "
+            "changes, and no credentials — an Outlook rule or a scheduled export can fill it."
+        )
+        requirements.append(
+            "Or provision Microsoft Graph for direct mailbox access, which requires Entra ID "
+            "app registration, admin consent, and a security review — see "
+            "docs/OUTLOOK_INTEGRATION.md."
+        )
+    return requirements
+
+
 def connector_status() -> dict[str, Any]:
     """Active connector availability, plus what each inactive one would need."""
     active = get_connector()
