@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.4" />
+  <link rel="stylesheet" href="/static/style.css?v=0.10.0" />
 </head>
 <body>
   <!-- Email login gate (first screen) -->
@@ -55,6 +55,10 @@
     <button type="button" class="tab" data-view="uploads">
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
       User Uploaded Documents
+    </button>
+    <button type="button" class="tab" data-view="email">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4-8 5-8-5V6l8 5 8-5z"/></svg>
+      Email Assistant
     </button>
     <div class="tabbar-right"></div>
   </nav>
@@ -2031,6 +2035,124 @@
           <div id="uploadList" class="file-grid"></div>
         </div>
       </section>
+
+      <!-- Email Assistant (Outlook) -->
+      <section id="view-email" class="view" hidden>
+        <div class="docs-panel docs-panel-email">
+          <div class="docs-head">
+            <h2>Email Assistant</h2>
+          </div>
+          <p class="docs-desc">
+            Reads your recent email, works out what each message needs, and prepares the
+            replies, notes, and calendar invites — for you to review and send yourself.
+          </p>
+
+          <div class="email-notice" role="note">
+            <strong>Before you use this:</strong> email text is sent to the AI model to be
+            processed, the same way uploaded documents are. Do not use it for classified
+            material. For CUI, PII, procurement-sensitive, or attorney-client content, follow
+            your organization's policy on AI tools first. Obvious identifiers (SSN, EDIPI, date
+            of birth, card numbers) are redacted automatically, but that is not a substitute for
+            your own review. <strong>Project SPK never sends email and never writes to your
+            calendar</strong> — every draft and invite is a file you open, check, and act on.
+          </div>
+
+          <div id="emailModelNotice" class="email-model-notice" hidden></div>
+          <div id="emailMailboxStatus" class="email-mailbox" hidden></div>
+
+          <!-- Autonomous sweep -->
+          <section class="email-sweep" id="emailSweep">
+            <div class="email-sweep-head">
+              <div class="email-sweep-heading">
+                <h3 class="email-sweep-title">
+                  Your last <span id="emailSweepWindow">72</span> hours
+                </h3>
+                <p class="email-sweep-desc" id="emailSweepDesc">
+                  Every message in the window gets read, triaged, and turned into a draft reply,
+                  a note for the record, and an appointment where one is called for.
+                </p>
+              </div>
+              <div class="email-sweep-actions">
+                <button type="button" id="emailSweepBtn" class="email-btn email-btn-primary">
+                  Run the sweep
+                </button>
+                <label class="email-btn email-sweep-pick">
+                  <input type="file" id="emailSweepFiles" accept=".msg,.eml" multiple hidden />
+                  Choose email files
+                </label>
+              </div>
+            </div>
+
+            <div id="emailSweepSource" class="email-sweep-source" hidden></div>
+            <div id="emailSweepStatus" class="email-status" hidden></div>
+
+            <div id="emailSweepProgress" class="email-sweep-progress" hidden>
+              <div class="email-sweep-bar"><div class="email-sweep-bar-fill" id="emailSweepBarFill"></div></div>
+              <p class="email-sweep-progress-text" id="emailSweepProgressText"></p>
+            </div>
+
+            <div id="emailSweepDigest" class="email-sweep-digest" hidden></div>
+            <div id="emailSweepResults" class="email-sweep-results"></div>
+          </section>
+
+          <details class="email-single" id="emailSingle">
+            <summary class="email-single-summary">Work on one email instead</summary>
+            <p class="email-single-desc">
+              Paste a single thread to summarize it or draft one reply, without sweeping the
+              whole window.
+            </p>
+
+          <div class="email-input-head">
+            <label class="email-label" for="emailText">Paste the email thread from Outlook</label>
+            <label class="upload-btn email-msg-btn">
+              <input type="file" id="emailMsgInput" accept=".msg" hidden />
+              Upload .msg
+            </label>
+          </div>
+          <textarea
+            id="emailText"
+            class="email-textarea"
+            rows="12"
+            placeholder="Select the email in Outlook, press Ctrl+A then Ctrl+C, and paste here. Include the From/Sent/To/Subject lines so the assistant can see who is asking what."
+          ></textarea>
+          <div id="emailInputNote" class="email-input-note" hidden></div>
+
+          <div class="email-actions">
+            <button type="button" id="emailAnalyzeBtn" class="email-btn email-btn-primary">
+              Summarize &amp; triage
+            </button>
+            <button type="button" id="emailDraftBtn" class="email-btn">Draft a reply</button>
+            <button type="button" id="emailClearBtn" class="email-btn email-btn-quiet">Clear</button>
+          </div>
+
+          <details class="email-reply-options" id="emailReplyOptions">
+            <summary>Reply options</summary>
+            <div class="email-reply-grid">
+              <label class="email-field">
+                <span>Tone</span>
+                <select id="emailTone" class="email-select"></select>
+              </label>
+              <label class="email-field email-field-wide">
+                <span>What should the reply say or do? (optional)</span>
+                <input
+                  type="text"
+                  id="emailInstructions"
+                  class="email-input"
+                  placeholder="e.g. Hold the 21-day review period and ask for the missing mix design data."
+                />
+              </label>
+              <label class="email-check">
+                <input type="checkbox" id="emailUseLibrary" />
+                <span>Cite the Document Library (slower — retrieves the controlling USACE policy)</span>
+              </label>
+            </div>
+          </details>
+
+          <div id="emailStatus" class="email-status" hidden></div>
+          <div id="emailResults" class="email-results"></div>
+          </details>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -2078,6 +2200,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.4"></script>
+  <script src="/static/app.js?v=0.10.0"></script>
 </body>
 </html>

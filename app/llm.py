@@ -4,6 +4,7 @@ import base64
 import mimetypes
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 from openai import BadRequestError, OpenAI
 
@@ -151,6 +152,56 @@ def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
                 continue
             raise
     raise RuntimeError("Could not find compatible parameters for the configured model")
+
+
+def chat_completion(
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.35,
+) -> str:
+    """Run a chat completion with an explicit message list.
+
+    Exposed for features that need their own system prompt rather than the
+    USACE question-answering persona (e.g. the email assistant). Token usage is
+    recorded automatically when tracking is active.
+    """
+    return _chat(messages, temperature=temperature)
+
+
+DEFAULT_OPENAI_HOST = "api.openai.com"
+
+
+def model_endpoint_info() -> dict[str, str | bool]:
+    """Where prompts are actually sent, so the UI can say so plainly.
+
+    The email assistant sends correspondence to whatever endpoint is configured.
+    Whether that is a self-hosted model or the public OpenAI API is the single
+    most important fact about the deployment's handling of that content, so it is
+    surfaced rather than left implicit in an environment variable.
+
+    Any OpenAI-compatible server works here — vLLM, Ollama, llama.cpp, LM Studio,
+    TGI, or Azure OpenAI in a government cloud. Set OPENAI_BASE_URL to its
+    ``/v1`` root and OPENAI_MODEL to the model it serves.
+    """
+    base_url = (settings.openai_base_url or "").strip()
+    host = DEFAULT_OPENAI_HOST
+    if base_url:
+        parsed = urlparse(base_url if "//" in base_url else f"//{base_url}")
+        host = parsed.hostname or base_url
+
+    is_public_openai = host.endswith(DEFAULT_OPENAI_HOST)
+    is_loopback = host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"} or host.endswith(".local")
+    return {
+        "model": settings.openai_model,
+        "endpoint_host": host,
+        "configured": bool(settings.openai_api_key),
+        "public_openai": is_public_openai,
+        # A custom host is self-hosted in the sense that matters here: prompts are
+        # not going to a commercial multi-tenant API. Whether it is genuinely
+        # isolated is a network question this code cannot answer.
+        "self_hosted": not is_public_openai,
+        "local": is_loopback,
+    }
 
 
 IMAGE_ANALYSIS_PROMPT = """You are analyzing an image uploaded to a USACE construction-document assistant so it can be searched and reviewed later.

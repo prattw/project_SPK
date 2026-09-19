@@ -1,3 +1,4 @@
+import tempfile
 import threading
 import zipfile
 from contextlib import asynccontextmanager
@@ -22,21 +23,46 @@ from app.auth import (
 )
 from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
+from app.email_assistant import DEFAULT_TONE, REPLY_TONES, analyze_thread, draft_reply
+from app.email_messages import (
+    SUPPORTED_MESSAGE_SUFFIXES,
+    EmailThread,
+    msg_support_available,
+    parse_message_file,
+    parse_msg_file,
+    parse_pasted_email,
+)
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
-from app.jobs import get_job, start_background_ingest, start_background_library_ingest, start_background_query
+from app.jobs import (
+    get_job,
+    start_background_email_sweep,
+    start_background_ingest,
+    start_background_library_ingest,
+    start_background_query,
+)
 from app.library_ingest import (
     extract_incoming_zip,
     library_incoming_path,
     save_incoming_upload,
 )
+from app.llm import model_endpoint_info
+from app.outlook_connector import (
+    MailboxUnavailable,
+    can_read_mailbox,
+    connector_status,
+    get_connector,
+    mailbox_setup_requirements,
+)
 from app.publication_sync import check_publication_sites
 from app.rag import get_rag
+from app.token_usage import get_tracking, start_tracking
 from app.usage import (
     format_weekly_report_text,
     get_weekly_snapshot,
     init_usage_db,
     is_usage_admin,
     list_weekly_snapshots,
+    record_email_usage,
     record_error,
     record_login,
     record_upload,
@@ -116,6 +142,7 @@ class JobStatusResponse(BaseModel):
     elapsed_ms: int | None = None
     result: QueryResponse | None = None
     library_report: dict | None = None
+    sweep_report: dict | None = None
 
 
 class LibraryIngestRequest(BaseModel):
@@ -223,7 +250,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.8.1",
+    version="0.10.0",
     lifespan=lifespan,
 )
 
@@ -481,6 +508,10 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
+    # An email sweep result contains message bodies. 404 rather than 403 for
+    # someone else's job, so job ids are not confirmable by probing.
+    if job.owner_email and job.owner_email != (authenticated_email(request) or "").lower():
+        raise HTTPException(status_code=404, detail="Job not found.")
     result = None
     if job.kind == "query" and job.result:
         result = QueryResponse(**job.result)
@@ -500,6 +531,7 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
         elapsed_ms=job.elapsed_ms,
         result=result,
         library_report=job.library_report,
+        sweep_report=job.sweep_report,
     )
 
 
@@ -523,6 +555,395 @@ def query(request: Request, body: QueryRequest) -> QueryJobResponse:
         },
     )
     return QueryJobResponse(job_id=job.id, status=job.status)
+
+
+class EmailAnalyzeRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200_000, description="Email text pasted from Outlook")
+    session_id: str | None = Field(default=None, max_length=64)
+
+
+class EmailDraftRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200_000, description="Email text pasted from Outlook")
+    instructions: str = Field(default="", max_length=4_000, description="What the reply should say or do")
+    tone: str = Field(default=DEFAULT_TONE, max_length=32)
+    use_library: bool = Field(default=False, description="Ground the reply in the Document Library")
+    session_id: str | None = Field(default=None, max_length=64)
+
+
+def _require_email_assistant() -> None:
+    if not settings.email_assistant_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="The email assistant is disabled on this deployment (set EMAIL_ASSISTANT_ENABLED=true).",
+        )
+
+
+def _parse_email_request(text: str) -> EmailThread:
+    if len(text) > settings.email_max_chars:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"That email is {len(text):,} characters, over the "
+                f"{settings.email_max_chars:,} character limit. Paste a shorter portion of the thread."
+            ),
+        )
+    thread = parse_pasted_email(text, scrub=settings.email_scrub_pii)
+    if not any(turn.body.strip() for turn in thread.turns):
+        raise HTTPException(status_code=400, detail="No email text found. Paste the email body.")
+    return thread
+
+
+@app.get("/email/status")
+def email_status(request: Request) -> dict:
+    """What the email assistant can do on this deployment, and what it cannot."""
+    require_api_key(request)
+    return {
+        "enabled": settings.email_assistant_enabled,
+        "scrub_pii": settings.email_scrub_pii,
+        "max_chars": settings.email_max_chars,
+        "msg_upload_supported": msg_support_available(),
+        "upload_suffixes": list(SUPPORTED_MESSAGE_SUFFIXES),
+        "tones": [{"key": key, "description": value} for key, value in REPLY_TONES.items()],
+        "mailbox": connector_status(),
+        "model": model_endpoint_info(),
+        "sweep": {
+            "enabled": settings.email_sweep_enabled,
+            "window_hours": settings.email_sweep_hours,
+            "max_window_hours": settings.email_sweep_max_hours,
+            "max_messages": settings.email_sweep_max_messages,
+            # The UI only auto-starts when the source needs no files from the user.
+            "autostart": settings.email_sweep_autostart and can_read_mailbox(),
+            "can_read_mailbox": can_read_mailbox(),
+            "timezone": settings.email_sweep_timezone,
+            "drafts": settings.email_sweep_drafts,
+            "notes": settings.email_sweep_notes,
+            "invites": settings.email_sweep_invites,
+        },
+    }
+
+
+class EmailSweepRequest(BaseModel):
+    hours: int | None = Field(
+        default=None, ge=1, le=336, description="How far back to sweep. Defaults to EMAIL_SWEEP_HOURS (72)."
+    )
+    draft_replies: bool | None = Field(default=None, description="Draft replies for mail that needs one")
+    write_notes: bool | None = Field(default=None, description="Write a note for the record per message")
+    build_invites: bool | None = Field(default=None, description="Build .ics appointments and invites")
+    tone: str = Field(default=DEFAULT_TONE, max_length=32)
+    use_library: bool = Field(default=False, description="Ground reply drafts in the Document Library")
+    session_id: str | None = Field(default=None, max_length=64)
+
+    def sweep_kwargs(self) -> dict:
+        return {
+            "draft_replies": self.draft_replies,
+            "write_notes": self.write_notes,
+            "build_invites": self.build_invites,
+            "tone": self.tone,
+            "use_library": self.use_library,
+        }
+
+
+def _require_email_sweep() -> None:
+    _require_email_assistant()
+    if not settings.email_sweep_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="The autonomous email sweep is disabled on this deployment (set EMAIL_SWEEP_ENABLED=true).",
+        )
+
+
+@app.post("/email/sweep", response_model=QueryJobResponse)
+def email_sweep(request: Request, body: EmailSweepRequest) -> QueryJobResponse:
+    """Sweep the configured mail source for the recent window and prepare the work.
+
+    Reads every message received in the window, analyzes it, and drafts the
+    replies, notes, and calendar invites it calls for. Returns a job id; poll
+    ``GET /jobs/{job_id}`` for progress and the report.
+
+    Requires a source that can enumerate mail on its own — the ``local_folder``
+    connector, or Graph once provisioned. With the default ``manual`` connector
+    there is no mailbox to read, so this returns 503 with the setup steps and the
+    client should use ``POST /email/sweep/upload`` instead.
+    """
+    require_api_key(request)
+    _require_email_sweep()
+    _require_keys()
+    email = authenticated_email(request)
+
+    if not can_read_mailbox():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": (
+                    "Project SPK has no mail source it can read on its own, so it cannot sweep "
+                    "automatically. Drag the last few days of email out of Outlook and use "
+                    "'Choose email files' instead, or configure a local mail folder."
+                ),
+                "requirements": mailbox_setup_requirements(),
+                "connector": connector_status().get("connector"),
+            },
+        )
+
+    job = start_background_email_sweep(
+        user_email=email,
+        hours=body.hours,
+        session_id=body.session_id,
+        sweep_kwargs=body.sweep_kwargs(),
+    )
+    return QueryJobResponse(
+        job_id=job.id,
+        status=job.status,
+        message="Email sweep started. Poll GET /jobs/{job_id} for progress.",
+    )
+
+
+@app.post("/email/sweep/upload", response_model=QueryJobResponse)
+async def email_sweep_upload(
+    request: Request,
+    files: list[UploadFile] = File(..., description=".msg or .eml files to sweep"),
+    hours: int = Form(default=0, description="Window in hours; 0 uses the default"),
+    draft_replies: bool = Form(default=True),
+    write_notes: bool = Form(default=True),
+    build_invites: bool = Form(default=True),
+    tone: str = Form(default=DEFAULT_TONE),
+    use_library: bool = Form(default=False),
+    session_id: str | None = Form(default=None),
+) -> QueryJobResponse:
+    """Sweep a batch of messages the user dragged out of Outlook.
+
+    The path that needs no IT approvals: multi-select the last few days in
+    Outlook, drag them in, and the same analysis runs over the batch. Files are
+    parsed in a temp directory that is deleted before the job starts, and email
+    content is never written to the document index.
+    """
+    require_api_key(request)
+    _require_email_sweep()
+    _require_keys()
+    email = authenticated_email(request)
+
+    if not files:
+        raise HTTPException(status_code=400, detail="Select at least one .msg or .eml file.")
+    limit = settings.email_sweep_max_messages
+    if len(files) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"That is {len(files)} files, over the {limit}-message limit for one sweep. "
+                "Select fewer messages or raise EMAIL_SWEEP_MAX_MESSAGES."
+            ),
+        )
+
+    threads: list[EmailThread] = []
+    warnings: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for upload in files:
+            name = Path(upload.filename or "").name
+            suffix = Path(name).suffix.lower()
+            if suffix not in SUPPORTED_MESSAGE_SUFFIXES:
+                warnings.append(f"{name or 'file'}: not a .msg or .eml file.")
+                continue
+            if suffix == ".msg" and not msg_support_available():
+                warnings.append(f"{name}: reading .msg needs the 'extract-msg' package on the server.")
+                continue
+            data = await upload.read()
+            if not data:
+                warnings.append(f"{name}: empty file.")
+                continue
+            if len(data) > settings.max_upload_bytes:
+                warnings.append(f"{name}: too large.")
+                continue
+            path = Path(tmp) / name
+            path.write_bytes(data)
+            try:
+                thread = await run_in_threadpool(
+                    parse_message_file, path, scrub=settings.email_scrub_pii
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad file should not fail the batch
+                warnings.append(f"{name}: could not be read ({exc}).")
+                continue
+            threads.append(thread)
+
+    if not threads:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "None of those files could be read as email.",
+                "warnings": warnings,
+            },
+        )
+
+    job = start_background_email_sweep(
+        user_email=email,
+        # An uploaded batch is the user's explicit selection, so the window only
+        # filters it — it does not go looking for anything else.
+        hours=hours or settings.email_sweep_max_hours,
+        threads=threads,
+        source="upload",
+        session_id=session_id,
+        sweep_kwargs={
+            "draft_replies": draft_replies,
+            "write_notes": write_notes,
+            "build_invites": build_invites,
+            "tone": tone,
+            "use_library": use_library,
+        },
+    )
+    return QueryJobResponse(
+        job_id=job.id,
+        status=job.status,
+        message=(
+            f"Sweeping {len(threads)} message(s). Poll GET /jobs/{{job_id}} for progress."
+            + (f" {len(warnings)} file(s) skipped." if warnings else "")
+        ),
+    )
+
+
+@app.get("/email/mailbox/messages")
+def email_mailbox_messages(request: Request, hours: int = 0, limit: int = 25) -> dict:
+    """Preview what a sweep would read, without running any model calls."""
+    require_api_key(request)
+    _require_email_assistant()
+
+    from app.email_sweep import window_bounds
+
+    since, _until, window_hours = window_bounds(hours or None)
+    try:
+        refs = get_connector().list_messages(
+            user_email=authenticated_email(request) or "",
+            since=since,
+            limit=max(1, min(limit, settings.email_sweep_max_messages)),
+        )
+    except MailboxUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"message": str(exc), "requirements": exc.requirements},
+        ) from exc
+
+    return {
+        "window_hours": window_hours,
+        "since": since.isoformat(),
+        "count": len(refs),
+        "messages": [vars(ref) for ref in refs],
+    }
+
+
+@app.post("/email/analyze")
+def email_analyze(request: Request, body: EmailAnalyzeRequest) -> dict:
+    """Summarize and triage a pasted Outlook email in one pass."""
+    require_api_key(request)
+    _require_email_assistant()
+    _require_keys()
+    email = authenticated_email(request)
+    thread = _parse_email_request(body.text)
+
+    start_tracking()
+    try:
+        analysis = analyze_thread(thread, user_email=email)
+    except ValueError as exc:
+        record_error(
+            email=email, session_id=body.session_id, source="email", message=str(exc), detail="analyze"
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — surface a readable message, log the rest
+        record_error(
+            email=email, session_id=body.session_id, source="email", message=str(exc), detail="analyze"
+        )
+        raise HTTPException(status_code=500, detail=f"Could not analyze that email: {exc}") from exc
+    finally:
+        record_email_usage(
+            email=email,
+            session_id=body.session_id,
+            action="analyze",
+            tokens=get_tracking(),
+        )
+
+    return {"email": thread.as_dict(), "analysis": analysis}
+
+
+@app.post("/email/draft-reply")
+def email_draft_reply(request: Request, body: EmailDraftRequest) -> dict:
+    """Draft a reply for the user to review and send from Outlook themselves."""
+    require_api_key(request)
+    _require_email_assistant()
+    _require_keys()
+    email = authenticated_email(request)
+    thread = _parse_email_request(body.text)
+
+    start_tracking()
+    try:
+        draft = draft_reply(
+            thread,
+            instructions=body.instructions,
+            tone=body.tone,
+            use_library=body.use_library,
+            user_email=email,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface a readable message, log the rest
+        record_error(
+            email=email, session_id=body.session_id, source="email", message=str(exc), detail="draft"
+        )
+        raise HTTPException(status_code=500, detail=f"Could not draft a reply: {exc}") from exc
+    finally:
+        record_email_usage(
+            email=email,
+            session_id=body.session_id,
+            action="draft",
+            tokens=get_tracking(),
+        )
+
+    return {"email": thread.as_dict(), "draft": draft}
+
+
+@app.post("/email/parse-msg")
+async def email_parse_msg(request: Request, file: UploadFile = File(...)) -> dict:
+    """Parse an Outlook .msg file dragged out of Outlook into thread text.
+
+    Returns the extracted text so the client can review it before running an
+    analysis or draft. The file is parsed in a temp directory and never indexed —
+    email content does not enter the document search index.
+    """
+    require_api_key(request)
+    _require_email_assistant()
+
+    if not msg_support_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Reading .msg files requires the 'extract-msg' package on the server. "
+                "Paste the email text instead."
+            ),
+        )
+
+    name = Path(file.filename or "").name
+    if not name.lower().endswith(".msg"):
+        raise HTTPException(status_code=400, detail="Upload an Outlook .msg file.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="That .msg file is empty.")
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail="That .msg file is too large.")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / name
+        path.write_bytes(data)
+        try:
+            thread = await run_in_threadpool(
+                parse_msg_file, path, scrub=settings.email_scrub_pii
+            )
+        except Exception as exc:  # noqa: BLE001 — bad .msg should not 500 silently
+            record_error(
+                email=authenticated_email(request),
+                session_id=None,
+                source="email",
+                message=str(exc),
+                detail="parse-msg",
+            )
+            raise HTTPException(
+                status_code=400, detail=f"Could not read that .msg file: {exc}"
+            ) from exc
+
+    return {"email": thread.as_dict(), "text": thread.to_prompt_text()}
 
 
 class ClientErrorReport(BaseModel):
