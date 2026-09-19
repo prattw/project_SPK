@@ -2240,6 +2240,11 @@ function applySweepConfig(data) {
       ? `Read everything received in the last ${sweepConfig.windowHours} hours`
       : "Project SPK has no mail source it can read on its own — choose email files instead";
   }
+  // With no readable source, picking files is the only thing that works, so it
+  // should be the button that looks like the action to take.
+  document
+    .querySelector(".email-sweep-pick")
+    ?.classList.toggle("email-btn-primary", !sweepConfig.canReadMailbox);
   if (sweep.enabled === false) {
     document.getElementById("emailSweep")?.setAttribute("hidden", "hidden");
   }

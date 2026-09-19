@@ -157,7 +157,8 @@ class ManualConnector:
             "can_create_drafts": False,
             "can_send": False,
             "description": (
-                "Paste an email from Outlook, or upload a .msg file dragged out of Outlook. "
+                "You supply the messages: paste a thread from Outlook, or select .msg/.eml "
+                "files dragged out of Outlook — several at once to sweep a whole window. "
                 "Project SPK never connects to your mailbox in this mode."
             ),
             "requirements": [],

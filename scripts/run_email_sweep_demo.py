@@ -278,6 +278,8 @@ def main() -> int:
     import uvicorn
 
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8010
+    # "manual" exercises the default posture: no mail source, user supplies files.
+    connector = sys.argv[2] if len(sys.argv) > 2 else "local_folder"
     folder = Path(tempfile.mkdtemp(prefix="spk-demo-mail-"))
     now = datetime.now(timezone.utc)
     for name, subject, sender, hours_ago, body in SAMPLES:
@@ -292,8 +294,8 @@ def main() -> int:
             ).encode()
         )
 
-    os.environ["OUTLOOK_CONNECTOR"] = "local_folder"
-    os.environ["OUTLOOK_LOCAL_FOLDER"] = str(folder)
+    os.environ["OUTLOOK_CONNECTOR"] = connector
+    os.environ["OUTLOOK_LOCAL_FOLDER"] = str(folder) if connector == "local_folder" else ""
 
     from app import email_assistant
 
@@ -301,6 +303,7 @@ def main() -> int:
 
     from app.main import app
 
+    print(f"Connector: {connector}")
     print(f"Demo mail folder: {folder} ({len(SAMPLES)} messages)")
     print(f"Sign in as: {DEMO_USER}")
     print(f"Serving on http://127.0.0.1:{port}")
