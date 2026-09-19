@@ -223,6 +223,62 @@ When `status` is `done`, the documents are **live for all users**.
 curl -s "$SPK_URL/admin/library/incoming" -H "Authorization: Bearer $SPK_TOKEN"
 ```
 
+## Email Assistant (Outlook)
+
+The **Email Assistant** tab summarizes an Outlook thread, triages what it asks of
+the user, and drafts a reply the user reviews and sends themselves. Two input paths
+work with no additional IT approvals:
+
+- **Paste** — select the email in Outlook, `Ctrl+A`, `Ctrl+C`, paste into the tab.
+- **Upload .msg** — drag the email out of Outlook and upload the `.msg` file.
+
+Project SPK **never sends email and never connects to a mailbox.** Reading a
+mailbox directly requires Entra ID app registration, admin consent, a delegated
+user token, and a security review — all documented in
+[docs/OUTLOOK_INTEGRATION.md](docs/OUTLOOK_INTEGRATION.md). `GET /email/status`
+reports exactly what is still outstanding, and the UI shows the same list.
+
+> **Read before rollout:** email text is sent to whatever endpoint `OPENAI_API_KEY`
+> and `OPENAI_BASE_URL` point at. Email is more likely than criteria documents to
+> contain CUI or PII — see the Email Assistant note in
+> [SECURITY.md](SECURITY.md#hosting-and-data-caution-read-this).
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `EMAIL_ASSISTANT_ENABLED` | `true` | Set `false` to hide/disable the feature entirely |
+| `EMAIL_MAX_CHARS` | `60000` | Largest email thread accepted |
+| `EMAIL_SCRUB_PII` | `true` | Redact SSN/EDIPI/DOB/card numbers before the LLM |
+| `EMAIL_LIBRARY_TOP_K` | `24` | Retrieval budget when a reply cites the Document Library |
+| `OUTLOOK_CONNECTOR` | `manual` | `manual` or `graph` (graph is not operational yet) |
+| `OUTLOOK_GRAPH_CLOUD` | `gcchigh` | `commercial`, `gcc`, `gcchigh`, or `dod` |
+| `OUTLOOK_TENANT_ID` / `OUTLOOK_CLIENT_ID` / `OUTLOOK_CLIENT_SECRET` | _(empty)_ | Entra ID app registration, once provisioned |
+
+`.msg` parsing needs the `extract-msg` package (already in `requirements.txt`). If
+it is missing, the `.msg` button hides itself and pasting still works.
+
+### API
+
+```bash
+# What the assistant can do on this deployment
+curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/email/status"
+
+# Summarize + triage
+curl -X POST "$SPK_URL/email/analyze" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"text":"From: ...\nSubject: ...\n\nbody"}'
+
+# Draft a reply, citing the Document Library
+curl -X POST "$SPK_URL/email/draft-reply" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"text":"From: ...","instructions":"Hold the 21-day review period.","tone":"formal","use_library":true}'
+```
+
+Email actions appear in the Friday weekly report as
+`Email agent: N actions (N analyzed, N drafts)`. Subject lines, bodies, and
+participants are never stored — only the action type, user, timestamp, and tokens.
+
 ## Verify deployment
 
 ```bash

@@ -277,8 +277,10 @@ function showView(name) {
   document.getElementById("view-chat").hidden = name !== "chat";
   document.getElementById("view-library").hidden = name !== "library";
   document.getElementById("view-uploads").hidden = name !== "uploads";
+  document.getElementById("view-email").hidden = name !== "email";
   if (name === "uploads") refreshUploads();
   if (name === "library") refreshLibraryLinks();
+  if (name === "email") loadEmailStatus();
 }
 
 document.querySelectorAll(".tab[data-view]").forEach((t) => {
@@ -1415,10 +1417,382 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+/* ---------- Email Assistant (Outlook) ---------- */
+
+const emailTextEl = document.getElementById("emailText");
+const emailMsgInput = document.getElementById("emailMsgInput");
+const emailAnalyzeBtn = document.getElementById("emailAnalyzeBtn");
+const emailDraftBtn = document.getElementById("emailDraftBtn");
+const emailClearBtn = document.getElementById("emailClearBtn");
+const emailToneEl = document.getElementById("emailTone");
+const emailInstructionsEl = document.getElementById("emailInstructions");
+const emailUseLibraryEl = document.getElementById("emailUseLibrary");
+const emailStatusEl = document.getElementById("emailStatus");
+const emailResultsEl = document.getElementById("emailResults");
+const emailMailboxEl = document.getElementById("emailMailboxStatus");
+const emailInputNoteEl = document.getElementById("emailInputNote");
+
+let emailStatusLoaded = false;
+let emailBusy = false;
+
+/** FastAPI sends a string detail for our errors and a list for validation errors. */
+function emailErrorText(detail, fallback) {
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((d) => (d && typeof d === "object" ? d.msg || "" : String(d))).filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  if (detail && typeof detail === "object" && typeof detail.msg === "string") return detail.msg;
+  return fallback;
+}
+
+function setEmailStatus(message, kind = "info") {
+  if (!emailStatusEl) return;
+  if (!message) {
+    emailStatusEl.hidden = true;
+    emailStatusEl.textContent = "";
+    return;
+  }
+  emailStatusEl.hidden = false;
+  emailStatusEl.className = `email-status email-status-${kind}`;
+  emailStatusEl.textContent = message;
+}
+
+function setEmailBusy(busy, label) {
+  emailBusy = busy;
+  [emailAnalyzeBtn, emailDraftBtn, emailMsgInput].forEach((el) => {
+    if (el) el.disabled = busy;
+  });
+  if (busy) setEmailStatus(label || "Working...", "busy");
+}
+
+function emailRedactionNote(info) {
+  const redactions = (info && info.redactions) || {};
+  const entries = Object.entries(redactions).filter(([, n]) => n > 0);
+  if (!entries.length) return "";
+  const labels = { SSN: "SSN", "DOD-ID": "DoD ID", DOB: "date of birth", CARD: "card number" };
+  return (
+    "Redacted before sending to the AI: " +
+    entries.map(([key, n]) => `${n} ${labels[key] || key}`).join(", ") +
+    "."
+  );
+}
+
+function renderEmailMeta(info) {
+  if (!info) return "";
+  const rows = [
+    ["Subject", info.subject],
+    ["From", info.sender],
+    ["Sent", info.sent],
+    ["Messages in thread", info.turn_count ? String(info.turn_count) : ""],
+    ["Participants", (info.participants || []).join(", ")],
+    ["Attachments", (info.attachments || []).join(", ")],
+  ].filter(([, value]) => value);
+
+  const note = emailRedactionNote(info);
+  return (
+    `<div class="email-card email-card-meta">` +
+    `<h3 class="email-card-title">Email</h3>` +
+    rows
+      .map(
+        ([label, value]) =>
+          `<div class="email-meta-row"><span class="email-meta-label">${escapeHtml(label)}</span>` +
+          `<span class="email-meta-value">${escapeHtml(value)}</span></div>`
+      )
+      .join("") +
+    (note ? `<p class="email-redaction">${escapeHtml(note)}</p>` : "") +
+    `</div>`
+  );
+}
+
+function renderEmailList(title, items) {
+  if (!items || !items.length) return "";
+  return (
+    `<h4 class="email-sub">${escapeHtml(title)}</h4><ul class="email-ul">` +
+    items.map((item) => `<li>${escapeHtml(item)}</li>`).join("") +
+    `</ul>`
+  );
+}
+
+function renderEmailActionItems(items) {
+  if (!items || !items.length) return "";
+  return (
+    `<h4 class="email-sub">Action items</h4><ul class="email-ul email-ul-actions">` +
+    items
+      .map((item) => {
+        const owner = item.owner && item.owner !== "unclear" ? item.owner : "owner unclear";
+        const due = item.due && item.due !== "none stated" ? item.due : "no date stated";
+        return (
+          `<li>${escapeHtml(item.action)}` +
+          `<span class="email-action-meta">${escapeHtml(owner)} &middot; ${escapeHtml(due)}</span></li>`
+        );
+      })
+      .join("") +
+    `</ul>`
+  );
+}
+
+function renderEmailAnalysis(analysis) {
+  const priority = (analysis.priority || "medium").toLowerCase();
+  const badges = [
+    `<span class="email-badge email-badge-${escapeHtml(priority)}">${escapeHtml(priority)} priority</span>`,
+    analysis.category ? `<span class="email-badge">${escapeHtml(analysis.category)}</span>` : "",
+    `<span class="email-badge ${analysis.reply_needed ? "email-badge-reply" : ""}">${
+      analysis.reply_needed ? "reply needed" : "no reply needed"
+    }</span>`,
+  ].join("");
+
+  const reasons = [analysis.priority_reason, analysis.reply_needed_reason]
+    .filter(Boolean)
+    .map((r) => `<p class="email-reason">${escapeHtml(r)}</p>`)
+    .join("");
+
+  return (
+    `<div class="email-card">` +
+    `<h3 class="email-card-title">Summary &amp; triage</h3>` +
+    `<div class="email-badges">${badges}</div>` +
+    (analysis.summary ? `<p class="email-summary">${escapeHtml(analysis.summary)}</p>` : "") +
+    reasons +
+    renderEmailList("Key points", analysis.key_points) +
+    renderEmailActionItems(analysis.action_items) +
+    renderEmailList("Deadlines", analysis.deadlines) +
+    renderEmailList("Open questions", analysis.open_questions) +
+    (analysis.suggested_next_step
+      ? `<h4 class="email-sub">Suggested next step</h4><p class="email-next">${escapeHtml(
+          analysis.suggested_next_step
+        )}</p>`
+      : "") +
+    `</div>`
+  );
+}
+
+function renderEmailDraft(draft) {
+  const citations = (draft.citations || [])
+    .map((c) => {
+      const label = c.doc_number || c.source || "";
+      const pages = c.page_start ? `, p. ${c.page_start}` : "";
+      if (!label) return "";
+      return c.url
+        ? `<li><a href="${escapeHtml(withToken(c.url))}" target="_blank" rel="noopener">${escapeHtml(
+            label
+          )}${escapeHtml(pages)}</a></li>`
+        : `<li>${escapeHtml(label + pages)}</li>`;
+    })
+    .filter(Boolean)
+    .join("");
+
+  return (
+    `<div class="email-card email-card-draft">` +
+    `<div class="email-card-head">` +
+    `<h3 class="email-card-title">Draft reply</h3>` +
+    `<button type="button" class="email-copy-btn" id="emailCopyBtn">Copy draft</button>` +
+    `</div>` +
+    (draft.subject ? `<div class="email-draft-subject">${escapeHtml(draft.subject)}</div>` : "") +
+    `<div class="email-draft-body" id="emailDraftBody">${escapeHtml(draft.body || "")}</div>` +
+    (citations
+      ? `<h4 class="email-sub">Document Library sources cited</h4><ul class="email-ul">${citations}</ul>`
+      : "") +
+    (draft.library_error
+      ? `<p class="email-draft-warning">${escapeHtml(draft.library_error)}</p>`
+      : draft.used_library
+        ? ""
+        : `<p class="email-reason">Not grounded in the Document Library — turn on "Cite the Document Library" under Reply options if the reply needs to quote USACE policy.</p>`) +
+    `<p class="email-draft-warning">Review and edit this draft before sending. Project SPK cannot send email — copy it into Outlook yourself.</p>` +
+    `</div>`
+  );
+}
+
+function wireEmailCopyButton() {
+  const btn = document.getElementById("emailCopyBtn");
+  const body = document.getElementById("emailDraftBody");
+  if (!btn || !body) return;
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(body.textContent || "");
+      btn.textContent = "Copied";
+      setTimeout(() => (btn.textContent = "Copy draft"), 1500);
+    } catch {
+      // Clipboard access can be blocked; select the text so Ctrl+C still works.
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      btn.textContent = "Press Ctrl+C";
+      setTimeout(() => (btn.textContent = "Copy draft"), 2500);
+    }
+  });
+}
+
+async function loadEmailStatus() {
+  if (emailStatusLoaded) return;
+  try {
+    const res = await apiFetch("/email/status");
+    const data = await readJsonResponse(res);
+    if (!res.ok) return;
+    emailStatusLoaded = true;
+
+    if (emailToneEl && !emailToneEl.options.length) {
+      (data.tones || []).forEach((tone) => {
+        const option = document.createElement("option");
+        option.value = tone.key;
+        option.textContent = `${tone.key} — ${tone.description}`;
+        emailToneEl.appendChild(option);
+      });
+    }
+
+    if (emailMsgInput && data.msg_upload_supported === false) {
+      const label = emailMsgInput.closest("label");
+      if (label) label.hidden = true;
+    }
+
+    const mailbox = data.mailbox || {};
+    if (emailMailboxEl) {
+      const graph = mailbox.graph || (mailbox.connector === "graph" ? mailbox : null);
+      const requirements = (graph && graph.requirements) || [];
+      emailMailboxEl.hidden = false;
+      emailMailboxEl.innerHTML =
+        `<div class="email-mailbox-line"><strong>Mailbox connection:</strong> ${escapeHtml(
+          mailbox.description || "Not connected."
+        )}</div>` +
+        (requirements.length
+          ? `<details class="email-mailbox-details"><summary>What direct Outlook mailbox access still needs (${requirements.length})</summary>` +
+            `<ul class="email-ul">${requirements.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>` +
+            `</details>`
+          : "");
+    }
+
+    if (data.enabled === false) {
+      setEmailStatus(
+        "The email assistant is disabled on this deployment. Set EMAIL_ASSISTANT_ENABLED=true to turn it on.",
+        "error"
+      );
+      [emailAnalyzeBtn, emailDraftBtn].forEach((el) => el && (el.disabled = true));
+    }
+  } catch {
+    /* status is informational — the actions report their own errors */
+  }
+}
+
+function emailPayloadText() {
+  const text = (emailTextEl?.value || "").trim();
+  if (!text) {
+    setEmailStatus("Paste an email thread first, or upload a .msg file.", "error");
+    emailTextEl?.focus();
+    return null;
+  }
+  return text;
+}
+
+async function runEmailAnalyze() {
+  if (emailBusy) return;
+  const text = emailPayloadText();
+  if (!text) return;
+
+  setEmailBusy(true, "Reading the thread and triaging...");
+  try {
+    const res = await apiFetch("/email/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, session_id: currentSessionId }),
+    });
+    const data = await readJsonResponse(res);
+    if (!res.ok) {
+      throw new Error(emailErrorText(data.detail, "Could not analyze that email."));
+    }
+    emailResultsEl.innerHTML = renderEmailMeta(data.email) + renderEmailAnalysis(data.analysis);
+    setEmailStatus("");
+  } catch (err) {
+    setEmailStatus(err.message || "Could not analyze that email.", "error");
+  } finally {
+    setEmailBusy(false);
+  }
+}
+
+async function runEmailDraft() {
+  if (emailBusy) return;
+  const text = emailPayloadText();
+  if (!text) return;
+
+  const useLibrary = !!emailUseLibraryEl?.checked;
+  setEmailBusy(
+    true,
+    useLibrary
+      ? "Drafting a reply and retrieving the controlling USACE policy — this takes longer..."
+      : "Drafting a reply..."
+  );
+  try {
+    const res = await apiFetch("/email/draft-reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        instructions: emailInstructionsEl?.value || "",
+        tone: emailToneEl?.value || "professional",
+        use_library: useLibrary,
+        session_id: currentSessionId,
+      }),
+    });
+    const data = await readJsonResponse(res);
+    if (!res.ok) {
+      throw new Error(emailErrorText(data.detail, "Could not draft a reply."));
+    }
+    emailResultsEl.innerHTML = renderEmailMeta(data.email) + renderEmailDraft(data.draft);
+    wireEmailCopyButton();
+    setEmailStatus("");
+  } catch (err) {
+    setEmailStatus(err.message || "Could not draft a reply.", "error");
+  } finally {
+    setEmailBusy(false);
+  }
+}
+
+async function handleEmailMsgUpload(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+
+  setEmailBusy(true, `Reading ${file.name}...`);
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await apiFetch("/email/parse-msg", { method: "POST", body: form });
+    const data = await readJsonResponse(res);
+    if (!res.ok) {
+      throw new Error(emailErrorText(data.detail, "Could not read that .msg file."));
+    }
+    emailTextEl.value = data.text || "";
+    emailResultsEl.innerHTML = renderEmailMeta(data.email);
+    const note = [`Loaded ${file.name}.`, emailRedactionNote(data.email)].filter(Boolean).join(" ");
+    emailInputNoteEl.hidden = false;
+    emailInputNoteEl.textContent = `${note} Choose "Summarize & triage" or "Draft a reply".`;
+    setEmailStatus("");
+  } catch (err) {
+    setEmailStatus(err.message || "Could not read that .msg file.", "error");
+  } finally {
+    setEmailBusy(false);
+    input.value = "";
+  }
+}
+
+function initEmailAssistant() {
+  emailAnalyzeBtn?.addEventListener("click", runEmailAnalyze);
+  emailDraftBtn?.addEventListener("click", runEmailDraft);
+  emailMsgInput?.addEventListener("change", () => handleEmailMsgUpload(emailMsgInput));
+  emailClearBtn?.addEventListener("click", () => {
+    if (emailTextEl) emailTextEl.value = "";
+    if (emailInstructionsEl) emailInstructionsEl.value = "";
+    if (emailResultsEl) emailResultsEl.innerHTML = "";
+    if (emailInputNoteEl) emailInputNoteEl.hidden = true;
+    setEmailStatus("");
+    emailTextEl?.focus();
+  });
+}
+
 /* ---------- Init ---------- */
 
 async function initApp() {
   await loadLimits();
+  initEmailAssistant();
   await refreshUploads();
   await refreshLibraryLinks();
 }
