@@ -13,6 +13,11 @@ Usage:
     --exclude "(CUI) Policy Alert Summary 14 FEB 2025.pdf" \
     --exclude "CUI Doc - PAM.pdf"
 
+  # Send only what is not in the database yet — for a folder where most of the
+  # contents have already been uploaded at some point:
+  python3 scripts/zip_upload_library.py "~/Documents/Master Library" \
+    --skip-already-indexed --ingest
+
   # File an entire folder on one Document Library index page, regardless of
   # what the filenames look like:
   python3 scripts/zip_upload_library.py "~/Documents/Project SPK folder/Master Library" \
@@ -32,6 +37,7 @@ import argparse
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -54,9 +60,13 @@ INGESTABLE_EXTENSIONS = {
 DEFAULT_MAX_ZIP_MB = 60
 UPLOAD_TIMEOUT_SECONDS = 600
 UPLOAD_MAX_RETRIES = 3
+DRY_RUN_LIST_LIMIT = 60
 
 # Mirrors app/library_groups.py GROUP_ORDER.
 LIBRARY_GROUPS = ("engineering", "contracting-law", "discipline-knowledge", "miscellaneous")
+
+# Mirrors the part names app/library_ingest.py _split_pdf writes.
+PART_NAME_RE = re.compile(r"^(?P<stem>.+)__p\d{5}-\d{5}$")
 
 
 def discover_files(root: Path, excludes: set[str]) -> list[Path]:
@@ -205,6 +215,28 @@ def run_ingest(base_url: str, token: str) -> int:
             return 0 if job.get("status") == "done" else 1
 
 
+def with_split_originals(names: set[str]) -> set[str]:
+    """Add back the original filename of every PDF the server split into parts.
+
+    A PDF too large to index whole is split into ``<stem>__p00001-00500.pdf``
+    parts and the original deleted, so the original filename is absent from the
+    index even though its contents are in it. Without this, the largest documents
+    in the corpus — the ones that cost the most to send — would be uploaded and
+    re-split on every run.
+    """
+    originals = set()
+    for name in names:
+        match = PART_NAME_RE.match(Path(name).stem)
+        if match:
+            originals.add(match.group("stem") + Path(name).suffix)
+    return names | originals
+
+
+def fetch_indexed_names(base_url: str, token: str) -> set[str]:
+    """Filenames already in the search index."""
+    return with_split_originals(set(api_json(base_url, token, "/files").get("files") or []))
+
+
 def fetch_incoming_names(base_url: str, token: str) -> set[str]:
     """Names already sitting in library-incoming (e.g. from an interrupted prior run)."""
     proc = subprocess.run(
@@ -251,6 +283,11 @@ def main() -> int:
         help="Query /admin/library/incoming first and skip filenames already queued "
         "(safe to resume an interrupted run without re-uploading/duplicating files)",
     )
+    parser.add_argument(
+        "--skip-already-indexed", action="store_true",
+        help="Query /files first and send only the documents that are not in the "
+        "database yet — for a folder where most of the contents are already there",
+    )
     args = parser.parse_args()
 
     root = Path(args.root).expanduser()
@@ -259,21 +296,44 @@ def main() -> int:
         return 1
 
     excludes = set(args.exclude)
-    if args.skip_already_incoming and args.url and args.token:
-        already = fetch_incoming_names(args.url, args.token)
-        if already:
-            print(f"Skipping {len(already)} file(s) already in library-incoming.")
-            excludes |= already
-    files = discover_files(root, excludes)
+    if (args.skip_already_incoming or args.skip_already_indexed) and not (args.url and args.token):
+        print(
+            "--skip-already-incoming and --skip-already-indexed have to ask the server "
+            "what is already there. Set --url/--token or SPK_URL/SPK_TOKEN.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Kept apart from --exclude: a corpus contributes thousands of names, and
+    # printing them all as "excluded" would bury the handful the caller named.
+    already_there: set[str] = set()
+    if args.skip_already_incoming:
+        already_there |= fetch_incoming_names(args.url, args.token)
+    if args.skip_already_indexed:
+        already_there |= fetch_indexed_names(args.url, args.token)
+
+    found = discover_files(root, excludes)
+    files = [f for f in found if f.name not in already_there]
+    skipped = len(found) - len(files)
+
+    print(f"Found {len(found)} ingestible file(s) in {root}")
+    if excludes:
+        print(f"Excluded {len(excludes)} by name: {sorted(excludes)}")
+    if skipped:
+        print(f"Skipped {skipped} already on the server; {len(files)} new.")
     if not files:
+        # Having nothing left to send is the goal, not a failure — only an empty
+        # folder means the caller probably pointed at the wrong one.
+        if skipped:
+            print("Nothing new to upload — every file in this folder is already there.")
+            return 0
         print("No ingestible files found.", file=sys.stderr)
         return 1
 
     total_bytes = sum(f.stat().st_size for f in files)
     batches = batch_files(files, args.max_zip_mb * 1024 * 1024)
 
-    print(f"Found {len(files)} ingestible file(s), {total_bytes / (1024**3):.2f} GB total")
-    print(f"Excluded {len(excludes)} file(s) by name: {sorted(excludes)}")
+    print(f"Uploading {len(files)} file(s), {total_bytes / (1024**3):.2f} GB total")
     print(f"Split into {len(batches)} zip batch(es) (max {args.max_zip_mb} MB each)")
     if args.group:
         print(f"Index page: every file will be filed under '{args.group}'")
@@ -281,6 +341,12 @@ def main() -> int:
         print("Index page: inferred per file from its name")
 
     if args.dry_run:
+        # The point of the dry run is to recognize the files, so name them rather
+        # than count them — up to the point where the list stops being readable.
+        for f in files[:DRY_RUN_LIST_LIMIT]:
+            print(f"  {f.relative_to(root)}")
+        if len(files) > DRY_RUN_LIST_LIMIT:
+            print(f"  ... and {len(files) - DRY_RUN_LIST_LIMIT} more")
         for i, batch in enumerate(batches, 1):
             size = sum(f.stat().st_size for f in batch) / (1024 * 1024)
             print(f"  Batch {i}: {len(batch)} files, {size:.1f} MB")

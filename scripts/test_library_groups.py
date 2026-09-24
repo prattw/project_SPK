@@ -700,6 +700,31 @@ check("a bad fallback name is ignored rather than blanking the library",
 load_group_overrides(refresh=True)
 
 
+# Uploading a folder that is mostly already indexed should send only the rest, and
+# the only hard part is that a split PDF is in the index under names it was never
+# uploaded with.
+section("Recognizing what has already been uploaded")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from zip_upload_library import with_split_originals  # noqa: E402
+
+known = with_split_originals(
+    {
+        "ER 1110-2-1150 Engineering and Design.pdf",
+        "Big Design Manual__p00001-00500.pdf",
+        "Big Design Manual__p00501-01000.pdf",
+        "Draft__plan for the site.pdf",
+    }
+)
+check("a document keeps its own name", "ER 1110-2-1150 Engineering and Design.pdf" in known)
+check("a split PDF is recognized by its original name", "Big Design Manual.pdf" in known)
+check("the parts are still recognized too", "Big Design Manual__p00001-00500.pdf" in known)
+check("both parts resolve to one original", sum(1 for n in known if n == "Big Design Manual.pdf") == 1)
+check("a filename that merely contains __p is not mistaken for a part",
+      "Draft.pdf" not in known, sorted(known))
+check("nothing else is invented", len(known) == 5, sorted(known))
+
+
 # ---------------------------------------------------------------------------
 shutil.rmtree(_TMP, ignore_errors=True)
 
