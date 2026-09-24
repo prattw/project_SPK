@@ -1110,31 +1110,64 @@ body {
 }
 
 /* Memorial photograph closing the Pratt library index */
+/* The plate pairs a landscape postcard with a portrait, so the two are matched on
+   height rather than width and the row is centred as a whole. They wrap to one per
+   row when the card is too narrow to seat both. */
 .library-group-plate {
+  --plate-height: 17rem; /* of the photographs themselves, borders excluded */
+  --plate-border: 1px;
+
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 15px;
   margin: 2rem 0 0.5rem;
   padding-top: 1.5rem;
   border-top: 1px solid var(--border);
   text-align: center;
 }
 
+/* Each figure is as wide as its photograph at the shared height, so the pair lines
+   up on one height and the 15px between them is the distance between the pictures
+   rather than between their captions. Narrowing the card shrinks the width and the
+   image follows it, which keeps both photographs in their own proportions — a fixed
+   height would stretch them once there was no room left. Do not shrink: wrapping to
+   one per row beats squashing the pair unevenly. */
+.library-group-plate-item {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  width: min(100%, calc(var(--plate-height) * var(--plate-ratio) + 2 * var(--plate-border)));
+  margin: 0;
+}
+
+/* Each photograph's own pixel dimensions, so the two resolve to the same height
+   rather than to two roundings of it. */
+.library-group-plate-item-museum {
+  --plate-ratio: calc(969 / 592);
+}
+
+.library-group-plate-item-portrait {
+  --plate-ratio: calc(549 / 900);
+}
+
 .library-group-plate-img {
   display: block;
   width: 100%;
-  max-width: 34rem;
   height: auto;
-  margin: 0 auto;
-  border: 1px solid var(--border);
+  border: var(--plate-border) solid var(--border);
   border-radius: 6px;
   box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
 }
 
 .library-group-plate-caption {
-  margin: 0.7rem auto 0;
+  margin: 0.7rem 0 0;
   font-size: 0.8rem;
   font-style: italic;
   line-height: 1.5;
   color: var(--text-muted);
-  max-width: 30rem;
 }
 
 /* Document Library — two-column prose list */
