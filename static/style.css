@@ -1128,6 +1128,12 @@ body {
   text-align: center;
 }
 
+/* An author `display` beats the user agent's `[hidden] { display: none }`, so the
+   plate has to opt back out itself or it shows on every index page. */
+.library-group-plate[hidden] {
+  display: none;
+}
+
 /* Each figure is as wide as its photograph at the shared height, so the pair lines
    up on one height and the 15px between them is the distance between the pictures
    rather than between their captions. Narrowing the card shrinks the width and the
