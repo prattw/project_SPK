@@ -55,6 +55,13 @@ GROUP_LABELS: dict[str, str] = {
     DISCIPLINE_KNOWLEDGE: "Discipline Knowledge",
 }
 
+# Heading shown at the top of an index page, where there is room for a full
+# formal name. The labels above still name the navigation tabs, which have to
+# stay short. Only pages that differ from their label need an entry.
+GROUP_PAGE_TITLES: dict[str, str] = {
+    DISCIPLINE_KNOWLEDGE: "William H. Pratt Memorial Engineering & Science Library",
+}
+
 GROUP_DESCRIPTIONS: dict[str, str] = {
     ENGINEERING: (
         "Engineer Regulations, Manuals, Pamphlets and Circulars, ECBs, ETLs, "
@@ -257,6 +264,11 @@ def group_label(group: str) -> str:
     return GROUP_LABELS.get(group, GROUP_LABELS[DEFAULT_GROUP])
 
 
+def group_page_title(group: str) -> str:
+    """Full heading for an index page, falling back to its tab label."""
+    return GROUP_PAGE_TITLES.get(group) or group_label(group)
+
+
 def normalize_group(value: str | None) -> str | None:
     """Resolve a user-supplied group name (or label) to a canonical key."""
     if not value:
@@ -294,6 +306,7 @@ def group_summary(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {
             "group": group,
             "label": GROUP_LABELS[group],
+            "page_title": group_page_title(group),
             "description": GROUP_DESCRIPTIONS[group],
             "documents": counts.get(group, {}).get("documents", 0),
             "chunks": counts.get(group, {}).get("chunks", 0),

@@ -28,6 +28,7 @@ from app.library_groups import (
     GROUP_DESCRIPTIONS,
     GROUP_LABELS,
     GROUP_ORDER,
+    group_page_title,
     group_summary,
     library_group,
     normalize_group,
@@ -450,6 +451,7 @@ def list_library_group(request: Request, group: str) -> dict:
     return {
         "group": wanted_group,
         "label": GROUP_LABELS[wanted_group],
+        "page_title": group_page_title(wanted_group),
         "description": GROUP_DESCRIPTIONS[wanted_group],
         "count": len(documents),
         "assigned_count": assigned,

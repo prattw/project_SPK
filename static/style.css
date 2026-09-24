@@ -1109,6 +1109,34 @@ body {
   white-space: nowrap;
 }
 
+/* Memorial photograph closing the Pratt library index */
+.library-group-plate {
+  margin: 2rem 0 0.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.library-group-plate-img {
+  display: block;
+  width: 100%;
+  max-width: 34rem;
+  height: auto;
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
+.library-group-plate-caption {
+  margin: 0.7rem auto 0;
+  font-size: 0.8rem;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 30rem;
+}
+
 /* Document Library — two-column prose list */
 .library-recent {
   margin-bottom: 1.25rem;

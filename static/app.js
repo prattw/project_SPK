@@ -939,6 +939,7 @@ async function loadLibraryGroup(group) {
   }
   const payload = {
     label: data.label || "",
+    pageTitle: data.page_title || data.label || "",
     description: data.description || "",
     documents: data.documents || [],
     fetchedAt: Date.now(),
@@ -947,17 +948,23 @@ async function loadLibraryGroup(group) {
   return payload;
 }
 
+// The memorial photograph belongs to the Pratt library index only.
+const LIBRARY_PLATE_PAGE = "discipline-knowledge";
+
 async function renderLibraryGroupPage(group) {
   const titleEl = document.getElementById("libraryGroupTitle");
   const descEl = document.getElementById("libraryGroupDesc");
   const listEl = document.getElementById("libraryGroupList");
   const searchEl = document.getElementById("libraryGroupSearch");
+  const plateEl = document.getElementById("libraryGroupPlate");
   if (!titleEl || !listEl) return;
+
+  if (plateEl) plateEl.toggleAttribute("hidden", group !== LIBRARY_PLATE_PAGE);
 
   listEl.innerHTML = `<div class="library-list-empty">Loading index&hellip;</div>`;
   try {
     const payload = await loadLibraryGroup(group);
-    titleEl.textContent = payload.label;
+    titleEl.textContent = payload.pageTitle;
     if (descEl) descEl.textContent = payload.description;
     renderLibraryGroupList(payload.documents, searchEl ? searchEl.value : "");
   } catch (err) {
