@@ -793,11 +793,20 @@ function libraryDocLabel(doc) {
   return doc.doc_number || doc.display_title || doc.title || doc.source;
 }
 
+/** Case, punctuation and underscores are not a difference worth reprinting a title for. */
+function libraryTextKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function libraryDocSecondary(doc) {
   const label = libraryDocLabel(doc);
-  if (doc.title && doc.title !== label) return doc.title;
+  const key = libraryTextKey(label);
+  if (doc.title && libraryTextKey(doc.title) !== key) return doc.title;
   const stem = (doc.source || "").replace(/\.[^.]+$/, "");
-  if (stem && stem !== label) return stem.replace(/_/g, " ");
+  if (stem && libraryTextKey(stem) !== key) return stem.replace(/_/g, " ");
   return "";
 }
 
@@ -888,7 +897,13 @@ async function refreshLibraryLinks() {
 
 /* ---------- Document Library index pages ---------- */
 
-const LIBRARY_PAGES = ["all", "engineering", "contracting-law", "discipline-knowledge"];
+const LIBRARY_PAGES = [
+  "all",
+  "engineering",
+  "contracting-law",
+  "discipline-knowledge",
+  "miscellaneous",
+];
 
 let libraryPageCurrent = "all";
 let libraryGroupCache = new Map();
@@ -939,6 +954,7 @@ async function loadLibraryGroup(group) {
   }
   const payload = {
     label: data.label || "",
+    pageTitle: data.page_title || data.label || "",
     description: data.description || "",
     documents: data.documents || [],
     fetchedAt: Date.now(),
@@ -947,17 +963,23 @@ async function loadLibraryGroup(group) {
   return payload;
 }
 
+// The memorial photograph belongs to the Pratt library index only.
+const LIBRARY_PLATE_PAGE = "discipline-knowledge";
+
 async function renderLibraryGroupPage(group) {
   const titleEl = document.getElementById("libraryGroupTitle");
   const descEl = document.getElementById("libraryGroupDesc");
   const listEl = document.getElementById("libraryGroupList");
   const searchEl = document.getElementById("libraryGroupSearch");
+  const plateEl = document.getElementById("libraryGroupPlate");
   if (!titleEl || !listEl) return;
+
+  if (plateEl) plateEl.toggleAttribute("hidden", group !== LIBRARY_PLATE_PAGE);
 
   listEl.innerHTML = `<div class="library-list-empty">Loading index&hellip;</div>`;
   try {
     const payload = await loadLibraryGroup(group);
-    titleEl.textContent = payload.label;
+    titleEl.textContent = payload.pageTitle;
     if (descEl) descEl.textContent = payload.description;
     renderLibraryGroupList(payload.documents, searchEl ? searchEl.value : "");
   } catch (err) {

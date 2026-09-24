@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.6" />
+  <link rel="stylesheet" href="/static/style.css?v=0.9.11" />
 </head>
 <body>
   <!-- Email login gate (first screen) -->
@@ -143,6 +143,9 @@
             <button type="button" class="library-page-tab" data-library-page="discipline-knowledge">
               Discipline Knowledge<span class="library-page-count" data-count-for="discipline-knowledge"></span>
             </button>
+            <button type="button" class="library-page-tab" data-library-page="miscellaneous">
+              Miscellaneous Documents<span class="library-page-count" data-count-for="miscellaneous"></span>
+            </button>
           </nav>
 
           <!-- Index page: one of the three subject groups, rendered from /library/groups/{group} -->
@@ -160,6 +163,37 @@
               <span class="library-group-count" id="libraryGroupCount"></span>
             </div>
             <div id="libraryGroupList" class="library-list"></div>
+            <div id="libraryGroupPlate" class="library-group-plate" hidden>
+              <figure class="library-group-plate-item library-group-plate-item-museum">
+                <img
+                  class="library-group-plate-img"
+                  src="/static/img/roops-fort-pratt-museum.jpg"
+                  width="969"
+                  height="592"
+                  loading="lazy"
+                  decoding="async"
+                  alt="Roop's Fort and the William H. Pratt Memorial Museum on Weatherlow Street, a pair of log buildings under large shade trees, with a cross-section of a felled tree mounted on the museum wall."
+                />
+                <figcaption class="library-group-plate-caption">
+                  A 1960&rsquo;s photo postcard of Roop&rsquo;s Fort and the William H. Pratt
+                  museum on Weatherlow Street.
+                </figcaption>
+              </figure>
+              <figure class="library-group-plate-item library-group-plate-item-portrait">
+                <img
+                  class="library-group-plate-img"
+                  src="/static/img/william-pratt-portrait.jpg"
+                  width="549"
+                  height="900"
+                  loading="lazy"
+                  decoding="async"
+                  alt="Studio portrait of William Held Pratt in U.S. Army service dress, wearing a garrison cap with an insignia device and a decoration on his left breast."
+                />
+                <figcaption class="library-group-plate-caption">
+                  William Held Pratt, for whom this library is named.
+                </figcaption>
+              </figure>
+            </div>
           </div>
 
           <!-- Index page: every indexed library document -->
@@ -2114,6 +2148,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.6"></script>
+  <script src="/static/app.js?v=0.9.11"></script>
 </body>
 </html>

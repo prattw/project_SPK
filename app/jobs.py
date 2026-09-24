@@ -231,7 +231,9 @@ def run_library_ingest_job(
     job_id: str,
     *,
     purge_patterns: list[str] | None = None,
+    group: str | None = None,
 ) -> None:
+    from app.library_groups import group_label
     from app.library_ingest import library_incoming_path, run_library_ingest
 
     def on_progress(phase: str, done: int, total: int, detail: str) -> None:
@@ -269,6 +271,7 @@ def run_library_ingest_job(
         report = run_library_ingest(
             library_incoming_path(),
             purge_patterns=purge_patterns,
+            group=group,
             progress=on_progress,
         )
         data = report.to_dict()
@@ -277,6 +280,12 @@ def run_library_ingest_job(
             f"Indexed {report.files_indexed} file(s) ({report.chunks_indexed:,} chunks). "
             f"Failed: {report.files_failed}. Split oversized PDFs: {report.split_pdfs}."
         )
+        if report.grouped_files:
+            filed = ", ".join(
+                f"{count} on {group_label(page)}"
+                for page, count in sorted(report.grouped_files.items())
+            )
+            message += f" Filed: {filed}."
         if report.purged_sources:
             message += f" Purged {report.purged_sources:,} old chunk(s)."
         _update(
@@ -295,12 +304,16 @@ def run_library_ingest_job(
         _update(job_id, status="error", finished_at=time.time(), message=str(exc))
 
 
-def start_background_library_ingest(*, purge_patterns: list[str] | None = None) -> Job:
+def start_background_library_ingest(
+    *,
+    purge_patterns: list[str] | None = None,
+    group: str | None = None,
+) -> Job:
     job = create_library_ingest_job()
     thread = threading.Thread(
         target=run_library_ingest_job,
         args=(job.id,),
-        kwargs={"purge_patterns": purge_patterns},
+        kwargs={"purge_patterns": purge_patterns, "group": group},
         daemon=True,
     )
     thread.start()

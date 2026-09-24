@@ -28,12 +28,15 @@ from app.library_groups import (
     GROUP_DESCRIPTIONS,
     GROUP_LABELS,
     GROUP_ORDER,
+    group_page_title,
     group_summary,
+    library_group,
     normalize_group,
 )
 from app.library_ingest import (
     extract_incoming_zip,
     library_incoming_path,
+    read_incoming_groups,
     save_incoming_upload,
 )
 from app.publication_sync import check_publication_sites
@@ -131,12 +134,49 @@ class LibraryIngestRequest(BaseModel):
         max_length=20,
         description='Remove existing indexed sources matching these substrings before ingest (e.g. ["UFC"]).',
     )
+    group: str | None = Field(
+        default=None,
+        description=(
+            "Index page for queued files that were uploaded without a group "
+            '(e.g. "discipline-knowledge"). Per-file assignments still win.'
+        ),
+    )
+
+
+class LibraryRegroupRequest(BaseModel):
+    group: str = Field(description='Index page to file these documents on (e.g. "discipline-knowledge").')
+    sources: list[str] | None = Field(
+        default=None,
+        max_length=5000,
+        description="Exact indexed filenames to move.",
+    )
+    patterns: list[str] | None = Field(
+        default=None,
+        max_length=50,
+        description="Substrings matched against indexed filenames, as an alternative to listing them.",
+    )
+    from_group: str | None = Field(
+        default=None,
+        description="Select every document currently on this index page, instead of naming them.",
+    )
+    inferred_only: bool = Field(
+        default=False,
+        description=(
+            "Narrow from_group to documents that landed there by filename inference, "
+            "leaving documents that were deliberately filed there alone."
+        ),
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="Report what would move without writing anything.",
+    )
 
 
 class LibraryUploadResponse(BaseModel):
     filename: str
     message: str
     incoming_count: int
+    group: str | None = None
 
 
 class FilesResponse(BaseModel):
@@ -319,22 +359,47 @@ def health() -> HealthResponse:
     )
 
 
+def _misfiled_publication_number(doc: dict) -> bool:
+    """True when a document's filename names a publication that is not this document.
+
+    "AR 420-1 Class Handout.pdf" infers the doc number AR 420-1, which would show
+    it as that regulation and link to the official copy. Someone filing it on a
+    page that disagrees with that inference has said it is not the regulation, so
+    the number describes source material and must not stand in for the document.
+    """
+    assigned = normalize_group(doc.get("assigned_group") or "")
+    if not assigned or not doc.get("doc_number"):
+        return False
+    inferred = library_group(doc.get("category"), doc.get("doc_number"), doc.get("source"))
+    return inferred != assigned
+
+
 def _documents_with_urls() -> list[dict]:
+    """Library documents with display fields resolved, as copies.
+
+    The underlying list is cached and reused by routing and retrieval, so display
+    adjustments are made on copies rather than written back into it.
+    """
     rag = get_rag()
-    documents = rag.list_documents()
-    for doc in documents:
+    documents = []
+    for entry in rag.list_documents():
+        doc = dict(entry)
+        if _misfiled_publication_number(doc):
+            doc["doc_number"] = None
+            doc["display_title"] = doc.get("title") or doc.get("source")
         doc["url"] = document_link_url(
             doc.get("doc_number"),
             doc.get("source"),
             upload_origin=doc.get("upload_origin"),
         )
+        documents.append(doc)
     return documents
 
 
 @app.get("/files", response_model=FilesResponse)
 def list_files(
     request: Request,
-    group: str | None = Query(default=None, description="Library index page: engineering | contracting-law | discipline-knowledge"),
+    group: str | None = Query(default=None, description="Library index page: engineering | contracting-law | discipline-knowledge | miscellaneous"),
     origin: str | None = Query(default=None, description="Filter by upload origin: library | user"),
 ) -> FilesResponse:
     require_api_key(request)
@@ -363,7 +428,7 @@ def list_files(
 
 @app.get("/library/groups")
 def list_library_groups(request: Request) -> dict:
-    """Document counts for each of the three Document Library index pages."""
+    """Document counts for each Document Library index page."""
     require_api_key(request)
     library_docs = [
         d for d in _documents_with_urls() if (d.get("upload_origin") or "") == "library"
@@ -376,7 +441,7 @@ def list_library_groups(request: Request) -> dict:
 
 @app.get("/library/groups/{group}")
 def list_library_group(request: Request, group: str) -> dict:
-    """The document index for one library page (Engineering, Contracting & Law, Discipline Knowledge)."""
+    """The document index for one library page."""
     require_api_key(request)
     wanted_group = normalize_group(group)
     if not wanted_group:
@@ -391,11 +456,17 @@ def list_library_group(request: Request, group: str) -> dict:
         if (d.get("upload_origin") or "") == "library"
         and d.get("library_group") == wanted_group
     ]
+    # "Filed here on purpose" vs. "landed here because the filename matched a
+    # rule" is the difference between a curated page and a catch-all, so report it.
+    assigned = sum(1 for d in documents if normalize_group(d.get("assigned_group") or "") == wanted_group)
     return {
         "group": wanted_group,
         "label": GROUP_LABELS[wanted_group],
+        "page_title": group_page_title(wanted_group),
         "description": GROUP_DESCRIPTIONS[wanted_group],
         "count": len(documents),
+        "assigned_count": assigned,
+        "inferred_count": len(documents) - assigned,
         "documents": documents,
     }
 
@@ -675,46 +746,85 @@ def usage_weekly_snapshots(request: Request) -> dict:
     return {"snapshots": list_weekly_snapshots()}
 
 
+def _require_group(value: str | None) -> str | None:
+    """Validate an optional index-page name from a request."""
+    if not value:
+        return None
+    canonical = normalize_group(value)
+    if not canonical:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Unknown library group: {value}",
+                "valid_groups": list(GROUP_ORDER),
+            },
+        )
+    return canonical
+
+
 @app.post("/admin/library/upload", response_model=LibraryUploadResponse)
-async def admin_library_upload(request: Request, file: UploadFile = File(...)) -> LibraryUploadResponse:
+async def admin_library_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    group: str | None = Query(
+        default=None,
+        description='Index page this document belongs on (e.g. "discipline-knowledge").',
+    ),
+) -> LibraryUploadResponse:
     """Upload one library document to the production incoming folder (admin only)."""
     require_api_key(request)
     _require_usage_admin(request)
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
 
+    page = _require_group(group)
+
     content = await file.read()
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb} MB limit.")
 
     try:
-        dest = await run_in_threadpool(save_incoming_upload, content, file.filename)
+        dest = await run_in_threadpool(save_incoming_upload, content, file.filename, page)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     incoming = library_incoming_path()
     count = len(list(incoming.glob("*")))
+    destination = f" for the {GROUP_LABELS[page]} index" if page else ""
     return LibraryUploadResponse(
         filename=dest.name,
-        message=f"Saved to library-incoming. Upload remaining files, then POST /admin/library/ingest.",
+        message=(
+            f"Saved to library-incoming{destination}. "
+            "Upload remaining files, then POST /admin/library/ingest."
+        ),
         incoming_count=count,
+        group=page,
     )
 
 
 @app.post("/admin/library/upload-zip", response_model=LibraryUploadResponse)
-async def admin_library_upload_zip(request: Request, file: UploadFile = File(...)) -> LibraryUploadResponse:
+async def admin_library_upload_zip(
+    request: Request,
+    file: UploadFile = File(...),
+    group: str | None = Query(
+        default=None,
+        description='Index page every document in this zip belongs on (e.g. "discipline-knowledge").',
+    ),
+) -> LibraryUploadResponse:
     """Extract supported files from a zip into library-incoming (admin only)."""
     require_api_key(request)
     _require_usage_admin(request)
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Upload a .zip file.")
 
+    page = _require_group(group)
+
     content = await file.read()
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb} MB limit.")
 
     try:
-        names = await run_in_threadpool(extract_incoming_zip, content)
+        names = await run_in_threadpool(extract_incoming_zip, content, page)
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="Invalid zip file.") from exc
     except Exception as exc:
@@ -725,10 +835,12 @@ async def admin_library_upload_zip(request: Request, file: UploadFile = File(...
 
     incoming = library_incoming_path()
     count = len(list(incoming.glob("*")))
+    destination = f" for the {GROUP_LABELS[page]} index" if page else ""
     return LibraryUploadResponse(
         filename=file.filename,
-        message=f"Extracted {len(names)} file(s) to library-incoming.",
+        message=f"Extracted {len(names)} file(s) to library-incoming{destination}.",
         incoming_count=count,
+        group=page,
     )
 
 
@@ -751,7 +863,8 @@ def admin_library_ingest(
         )
 
     patterns = body.purge_patterns if body else None
-    job = start_background_library_ingest(purge_patterns=patterns)
+    page = _require_group(body.group if body else None)
+    job = start_background_library_ingest(purge_patterns=patterns, group=page)
     return QueryJobResponse(
         job_id=job.id,
         status=job.status,
@@ -765,18 +878,100 @@ def admin_library_incoming(request: Request) -> dict:
     require_api_key(request)
     _require_usage_admin(request)
     incoming = library_incoming_path()
+    assigned = read_incoming_groups()
     files = sorted(
         (
             {
                 "filename": p.name,
                 "size_bytes": p.stat().st_size,
+                "group": assigned.get(p.name),
             }
             for p in incoming.iterdir()
             if p.is_file() and not p.name.startswith(".")
         ),
         key=lambda item: item["filename"].lower(),
     )
-    return {"incoming_count": len(files), "files": files}
+    by_group: dict[str, int] = {}
+    for item in files:
+        key = item["group"] or "unassigned"
+        by_group[key] = by_group.get(key, 0) + 1
+    return {"incoming_count": len(files), "files": files, "by_group": by_group}
+
+
+def _sources_on_page(group: str, *, inferred_only: bool = False) -> list[str]:
+    """Filenames of the library documents currently shown on one index page.
+
+    ``inferred_only`` keeps just the ones that landed there because their filename
+    matched a rule, which is how a curated page is swept clear of documents nobody
+    filed there on purpose without disturbing the ones who were.
+    """
+    sources = []
+    for doc in _documents_with_urls():
+        if (doc.get("upload_origin") or "") != "library":
+            continue
+        if doc.get("library_group") != group:
+            continue
+        if inferred_only and normalize_group(doc.get("assigned_group") or "") == group:
+            continue
+        source = doc.get("source")
+        if source:
+            sources.append(source)
+    return sources
+
+
+@app.post("/admin/library/regroup")
+def admin_library_regroup(request: Request, body: LibraryRegroupRequest) -> dict:
+    """Move already-indexed documents to an index page (admin only).
+
+    Correcting where a document files should not require re-embedding it, so this
+    rewrites chunk metadata in place. Accepts exact filenames, substring patterns,
+    or ``from_group`` to take everything currently on one page — with
+    ``inferred_only`` to spare the documents deliberately filed there. ``dry_run``
+    reports the effect without writing.
+    """
+    require_api_key(request)
+    _require_usage_admin(request)
+
+    page = _require_group(body.group)
+    origin_page = _require_group(body.from_group)
+    rag = get_rag()
+
+    targets = list(body.sources or [])
+    if body.patterns:
+        targets.extend(rag.sources_matching(body.patterns))
+    if origin_page:
+        targets.extend(_sources_on_page(origin_page, inferred_only=body.inferred_only))
+    targets = sorted(set(targets))
+
+    if not targets:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Nothing to move. Provide sources, patterns, or a from_group that "
+                "matches indexed documents."
+            ),
+        )
+
+    if body.dry_run:
+        indexed = set(rag.list_sources())
+        would_move = sorted(t for t in targets if t in indexed)
+        return {
+            "group": page,
+            "dry_run": True,
+            "would_move": would_move,
+            "not_found": sorted(set(targets) - indexed),
+            "count": len(would_move),
+        }
+
+    try:
+        result = rag.assign_library_group(targets, page)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    result["dry_run"] = False
+    result["count"] = len(result["updated"])
+    result["label"] = GROUP_LABELS[page]
+    return result
 
 
 @app.post("/ingest", response_model=IngestResponse)
