@@ -62,6 +62,16 @@ UPLOAD_TIMEOUT_SECONDS = 600
 UPLOAD_MAX_RETRIES = 3
 DRY_RUN_LIST_LIMIT = 60
 
+# Railway answers 502 while a new container is starting, so a deploy landing
+# mid-upload is something to wait out rather than report as a failure.
+TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
+API_MAX_ATTEMPTS = 6
+API_RETRY_SECONDS = 10
+
+
+class ApiError(RuntimeError):
+    """A request that never came back usable, after waiting the server out."""
+
 # Mirrors app/library_groups.py GROUP_ORDER.
 LIBRARY_GROUPS = ("engineering", "contracting-law", "discipline-knowledge", "miscellaneous")
 
@@ -150,7 +160,11 @@ def upload_zip(base_url: str, token: str, data: bytes, label: str, group: str = 
             body, _, status = proc.stdout.rpartition("\n__HTTP_STATUS__:")
             code = int(status or "0")
             if code >= 400:
-                last_error = RuntimeError(f"HTTP {code}: {body.strip()}")
+                # A rejected zip or a bad token is rejected just as firmly next
+                # time; only a server that is down is worth waiting out.
+                if code not in TRANSIENT_STATUSES:
+                    raise ApiError(f"HTTP {code}: {body.strip()[:300]}")
+                last_error = RuntimeError(f"HTTP {code}: {body.strip()[:200]}")
                 print(f"  attempt {attempt}/{UPLOAD_MAX_RETRIES} failed: {last_error}; retrying...")
                 time.sleep(5)
                 continue
@@ -161,22 +175,45 @@ def upload_zip(base_url: str, token: str, data: bytes, label: str, group: str = 
 
 
 def api_json(base_url: str, token: str, path: str, method: str = "GET", body: dict | None = None) -> dict:
-    """One JSON call via curl, matching the upload path above."""
+    """One JSON call via curl, waiting out a server that is down or restarting.
+
+    A redeploy takes the app away for a few seconds and the proxy answers 502
+    with an HTML page in the meantime, so the status code is read rather than
+    inferred from whether the body happens to parse as JSON.
+    """
     cmd = [
         "curl", "-sS", "--max-time", "120",
+        "-w", "\n__HTTP_STATUS__:%{http_code}",
         "-X", method,
         f"{base_url.rstrip('/')}{path}",
         "-H", f"Authorization: Bearer {token}",
     ]
     if body is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr or "request failed")
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"unexpected response: {proc.stdout[:400]}") from exc
+
+    problem = "request failed"
+    for attempt in range(1, API_MAX_ATTEMPTS + 1):
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0:
+            payload, _, status = proc.stdout.rpartition("\n__HTTP_STATUS__:")
+            code = int(status or 0)
+            if code not in TRANSIENT_STATUSES:
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    raise ApiError(f"HTTP {code} from {path}: {payload.strip()[:300]}") from None
+                if code >= 400:
+                    raise ApiError(f"HTTP {code} from {path}: {data.get('detail', data)}")
+                return data
+            problem = f"HTTP {code} from {path}"
+        else:
+            problem = (proc.stderr or "no response").strip()
+
+        if attempt < API_MAX_ATTEMPTS:
+            print(f"  {problem} — the server may be restarting; retrying in {API_RETRY_SECONDS}s")
+            time.sleep(API_RETRY_SECONDS)
+
+    raise ApiError(f"{problem}, and it did not recover after {API_MAX_ATTEMPTS} attempts.")
 
 
 def run_ingest(base_url: str, token: str) -> int:
@@ -197,9 +234,18 @@ def run_ingest(base_url: str, token: str) -> int:
         time.sleep(5)
         try:
             job = api_json(base_url, token, f"/jobs/{job_id}")
-        except RuntimeError as exc:
-            print(f"  (could not read progress: {exc}; retrying)")
-            continue
+        except ApiError as exc:
+            # A server that restarts mid-ingest loses the job but not the work:
+            # indexed files leave library-incoming as they finish, so re-running
+            # the ingest resumes. Say so rather than waiting on a job that is gone.
+            print(f"\nLost contact with the ingest: {exc}", file=sys.stderr)
+            print(
+                "Files already indexed are out of the queue, so re-running with --ingest\n"
+                "resumes from where it stopped. For a batch that keeps crashing the\n"
+                "server, scripts/robust_library_ingest.py drives it to the end.",
+                file=sys.stderr,
+            )
+            return 1
 
         done, total = job.get("files_done") or 0, job.get("files_total") or 0
         line = f"  {job.get('phase') or job.get('status')}: {done}/{total} — {job.get('filename') or ''}".rstrip()
@@ -381,4 +427,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except ApiError as exc:
+        # A stack trace here says nothing the message does not, and buries it.
+        print(f"\n{exc}", file=sys.stderr)
+        raise SystemExit(1) from None

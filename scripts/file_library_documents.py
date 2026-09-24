@@ -43,36 +43,53 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 # Mirrors app/library_groups.py GROUP_ORDER.
 LIBRARY_GROUPS = ("engineering", "contracting-law", "discipline-knowledge", "miscellaneous")
 
 REQUEST_TIMEOUT_SECONDS = 300
 
+# Railway answers 502 while a new container is starting, so a deploy landing
+# mid-command is something to wait out rather than report as a failure.
+TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
+MAX_ATTEMPTS = 6
+RETRY_SECONDS = 10
+
 
 def api_post(base_url: str, token: str, path: str, body: dict) -> tuple[int, dict | str]:
     """POST JSON via curl, matching the rest of the admin tooling (avoids macOS
-    Python SSL cert issues)."""
-    proc = subprocess.run(
-        [
-            "curl", "-sS", "--max-time", str(REQUEST_TIMEOUT_SECONDS),
-            "-w", "\n__HTTP_STATUS__:%{http_code}",
-            "-X", "POST",
-            f"{base_url.rstrip('/')}{path}",
-            "-H", f"Authorization: Bearer {token}",
-            "-H", "Content-Type: application/json",
-            "-d", json.dumps(body),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr or proc.stdout or "curl failed")
-    payload, _, status = proc.stdout.rpartition("\n__HTTP_STATUS__:")
-    try:
-        return int(status or "0"), json.loads(payload)
-    except json.JSONDecodeError:
-        return int(status or "0"), payload.strip()
+    Python SSL cert issues) and waiting out a server that is restarting."""
+    cmd = [
+        "curl", "-sS", "--max-time", str(REQUEST_TIMEOUT_SECONDS),
+        "-w", "\n__HTTP_STATUS__:%{http_code}",
+        "-X", "POST",
+        f"{base_url.rstrip('/')}{path}",
+        "-H", f"Authorization: Bearer {token}",
+        "-H", "Content-Type: application/json",
+        "-d", json.dumps(body),
+    ]
+
+    problem = "request failed"
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0:
+            payload, _, status = proc.stdout.rpartition("\n__HTTP_STATUS__:")
+            code = int(status or "0")
+            if code not in TRANSIENT_STATUSES:
+                try:
+                    return code, json.loads(payload)
+                except json.JSONDecodeError:
+                    return code, payload.strip()[:300]
+            problem = f"HTTP {code}"
+        else:
+            problem = (proc.stderr or proc.stdout or "no response").strip()
+
+        if attempt < MAX_ATTEMPTS:
+            print(f"  {problem} — the server may be restarting; retrying in {RETRY_SECONDS}s")
+            time.sleep(RETRY_SECONDS)
+
+    raise RuntimeError(f"{problem}, and it did not recover after {MAX_ATTEMPTS} attempts.")
 
 
 def main() -> int:
@@ -147,4 +164,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except RuntimeError as exc:
+        print(f"\n{exc}", file=sys.stderr)
+        raise SystemExit(1) from None
