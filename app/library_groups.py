@@ -9,6 +9,12 @@ three top-level indexes:
 * ``contracting-law``       — Government Contracting & Law documents
 * ``discipline-knowledge``  — Discipline Knowledge documents
 
+The first two hold the publications people consult to do the work. The third is a
+reading collection: textbooks, handbooks and professional references kept for study
+rather than for daily reference. That distinction is why it is curated by explicit
+assignment and not by guessing at filenames — and why :data:`DEFAULT_GROUP` landing
+there is a liability, which ``load_group_overrides`` exists to let a deployment fix.
+
 Army Regulations and DA Pamphlets span both engineering and legal/administrative
 subject matter, so they are routed by their series number (AR 420-1 is facilities
 engineering; AR 27-1 is legal services) instead of by category alone.
@@ -72,8 +78,8 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
         "and Army regulations governing legal, contracting, and information management."
     ),
     DISCIPLINE_KNOWLEDGE: (
-        "Training material, course slides, discipline references, and supporting documents "
-        "that are not numbered USACE publications or acquisition regulations."
+        "Textbooks, handbooks, course material, and professional references gathered for "
+        "study and background reading, rather than the publications consulted for daily work."
     ),
 }
 

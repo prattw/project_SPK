@@ -233,10 +233,15 @@ you can bookmark or share a single index:
 | All Documents | `/#library` | Every indexed library document (build-time list) |
 | Government Engineering | `/#library/engineering` | ER, EM, EP, EC, ETL, ECB, UFC, TSPWG, Tri-Service, TM, MIL-STD, space planning, OM, PN, HQ policy memos, and engineering-series AR/PAM |
 | Government Contracting & Law | `/#library/contracting-law` | FAR, DFARS, AFARS, PGI, United States Code, UAI/UDG, IDaC, and legal/contracting/administrative AR/PAM |
-| Discipline Knowledge | `/#library/discipline-knowledge` | Course material, training slides, and discipline references that are not numbered publications — plus anything filed here explicitly at upload time |
+| Discipline Knowledge | `/#library/discipline-knowledge` | Textbooks, handbooks, course material, and professional references kept for study — filed here explicitly at upload time |
 
 The three subject indexes render live from the search index, so documents appear
 as soon as they are ingested — no `build_library_html.py` rebuild required.
+
+The first two indexes hold the publications people consult to do the work. The
+third, titled the William H. Pratt Memorial Engineering & Science Library, is a
+reading collection kept for study rather than daily reference, which is why it is
+curated by explicit assignment instead of by guessing at filenames.
 
 ### API
 
