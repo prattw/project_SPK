@@ -55,7 +55,7 @@ UPLOAD_TIMEOUT_SECONDS = 600
 UPLOAD_MAX_RETRIES = 3
 
 # Mirrors app/library_groups.py GROUP_ORDER.
-LIBRARY_GROUPS = ("engineering", "contracting-law", "discipline-knowledge")
+LIBRARY_GROUPS = ("engineering", "contracting-law", "discipline-knowledge", "miscellaneous")
 
 
 def discover_files(root: Path, excludes: set[str]) -> list[Path]:

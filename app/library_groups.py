@@ -1,28 +1,34 @@
-"""Group the Document Library into the three index pages users browse.
+"""Group the Document Library into the index pages users browse.
 
 Every indexed document already carries a fine-grained ``category`` from
 :mod:`app.doc_metadata` (``engineer-regulation``, ``acquisition-regulation``,
 ``army-regulation``, ...). This module rolls those ~24 categories up into the
-three top-level indexes:
+top-level indexes:
 
 * ``engineering``           — Government Engineering documents
 * ``contracting-law``       — Government Contracting & Law documents
 * ``discipline-knowledge``  — Discipline Knowledge documents
+* ``miscellaneous``         — Miscellaneous Documents
 
 The first two hold the publications people consult to do the work. The third is a
-reading collection: textbooks, handbooks and professional references kept for study
-rather than for daily reference. That distinction is why it is curated by explicit
-assignment and not by guessing at filenames — and why :data:`DEFAULT_GROUP` landing
-there is a liability, which ``load_group_overrides`` exists to let a deployment fix.
+reading collection: textbooks and professional references kept for study rather
+than for daily reference, and it is reached by assignment alone — no filename
+pattern routes a document there, because no filename can say that a document was
+chosen for the collection.
+
+That leaves documents nothing could be inferred about, which is what the fourth
+page is for. Each of the other three is defined by what it holds, so none of them
+can absorb the unclassifiable without becoming a poorer description of itself; a
+page of its own keeps them browsable and searchable while saying plainly that
+nobody has filed them.
 
 Army Regulations and DA Pamphlets span both engineering and legal/administrative
 subject matter, so they are routed by their series number (AR 420-1 is facilities
 engineering; AR 27-1 is legal services) instead of by category alone.
 
 Inference only works on documents whose filename follows a publication naming
-convention. A folder of discipline references — textbooks, handbooks, course
-decks, district guidance — has no such convention, so those documents can instead
-be *assigned* a group when they are uploaded. The assignment is stored on every
+convention. A textbook has no such convention, so those documents are instead
+*assigned* a group when they are uploaded. The assignment is stored on every
 chunk under :data:`GROUP_META_KEY` and is authoritative, which is what makes
 "everything in this folder belongs on this page" a deterministic statement rather
 than a guess about filenames.
@@ -44,21 +50,31 @@ from app.config import settings
 ENGINEERING = "engineering"
 CONTRACTING_LAW = "contracting-law"
 DISCIPLINE_KNOWLEDGE = "discipline-knowledge"
+MISCELLANEOUS = "miscellaneous"
 
-DEFAULT_GROUP = DISCIPLINE_KNOWLEDGE
+# Documents nothing could be inferred about land on their own page. The other
+# three are each defined by what they hold, so none of them can absorb a document
+# that matched no rule without becoming a poorer description of itself.
+DEFAULT_GROUP = MISCELLANEOUS
 
 OVERRIDE_FILENAME = "library_groups.json"
 
 # Chunk metadata key holding an explicit, upload-time group assignment.
 GROUP_META_KEY = "library_group"
 
-# Display metadata for the three index pages, in tab order.
-GROUP_ORDER: tuple[str, ...] = (ENGINEERING, CONTRACTING_LAW, DISCIPLINE_KNOWLEDGE)
+# Display metadata for the index pages, in tab order.
+GROUP_ORDER: tuple[str, ...] = (
+    ENGINEERING,
+    CONTRACTING_LAW,
+    DISCIPLINE_KNOWLEDGE,
+    MISCELLANEOUS,
+)
 
 GROUP_LABELS: dict[str, str] = {
     ENGINEERING: "Government Engineering",
     CONTRACTING_LAW: "Government Contracting & Law",
     DISCIPLINE_KNOWLEDGE: "Discipline Knowledge",
+    MISCELLANEOUS: "Miscellaneous Documents",
 }
 
 # Heading shown at the top of an index page, where there is room for a full
@@ -78,8 +94,13 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
         "and Army regulations governing legal, contracting, and information management."
     ),
     DISCIPLINE_KNOWLEDGE: (
-        "Textbooks, handbooks, course material, and professional references gathered for "
-        "study and background reading, rather than the publications consulted for daily work."
+        "Textbooks and professional references gathered for study and background reading, "
+        "rather than the publications consulted for daily work."
+    ),
+    MISCELLANEOUS: (
+        "Indexed and searchable, but not part of a subject collection — documents whose "
+        "filename matched none of the publication conventions and that have not been filed "
+        "on a page by hand."
     ),
 }
 
@@ -107,9 +128,12 @@ CATEGORY_GROUPS: dict[str, str] = {
     "us-code": CONTRACTING_LAW,
     "udg-uai": CONTRACTING_LAW,
     "idac": CONTRACTING_LAW,
-    # --- Discipline Knowledge ---
-    "course-material": DISCIPLINE_KNOWLEDGE,
-    "misc": DISCIPLINE_KNOWLEDGE,
+    # --- Miscellaneous ---
+    # Neither of these is a statement that a document belongs in a reading
+    # collection: "course-material" is a guess from the filename and "misc" is the
+    # absence of one. Discipline Knowledge is reached by assignment alone.
+    "course-material": MISCELLANEOUS,
+    "misc": MISCELLANEOUS,
 }
 
 # AR / DA PAM series that are engineering subject matter. Everything else in the
@@ -303,6 +327,10 @@ def normalize_group(value: str | None) -> str | None:
         "law": CONTRACTING_LAW,
         "discipline": DISCIPLINE_KNOWLEDGE,
         "knowledge": DISCIPLINE_KNOWLEDGE,
+        "misc": MISCELLANEOUS,
+        "miscellaneous-documents": MISCELLANEOUS,
+        "other": MISCELLANEOUS,
+        "unfiled": MISCELLANEOUS,
     }
     return aliases.get(candidate)
 

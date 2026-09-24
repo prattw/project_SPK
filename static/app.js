@@ -897,7 +897,13 @@ async function refreshLibraryLinks() {
 
 /* ---------- Document Library index pages ---------- */
 
-const LIBRARY_PAGES = ["all", "engineering", "contracting-law", "discipline-knowledge"];
+const LIBRARY_PAGES = [
+  "all",
+  "engineering",
+  "contracting-law",
+  "discipline-knowledge",
+  "miscellaneous",
+];
 
 let libraryPageCurrent = "all";
 let libraryGroupCache = new Map();

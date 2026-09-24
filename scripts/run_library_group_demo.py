@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Run Project SPK locally with a seeded library to exercise the index pages.
 
-Seeds numbered publications (filed by inference) plus a stand-in "Master Library"
-folder filed explicitly onto the Discipline Knowledge page, so the UI can be
-checked without an OpenAI key or the production corpus.
+Seeds numbered publications (filed by inference), a handful of titles filed by hand
+onto the Discipline Knowledge page, and strays that match no convention and so land
+on Miscellaneous Documents — so the UI can be checked without an OpenAI key or the
+production corpus.
 
     python3 scripts/run_library_group_demo.py [port]
 """
@@ -40,7 +41,11 @@ rag_module.embed_texts = embeddings.embed_texts
 rag_module.embed_query = embeddings.embed_query
 
 from app.doc_metadata import infer_doc_metadata  # noqa: E402
-from app.library_groups import DISCIPLINE_KNOWLEDGE, GROUP_META_KEY  # noqa: E402
+from app.library_groups import (  # noqa: E402
+    DISCIPLINE_KNOWLEDGE,
+    GROUP_META_KEY,
+    MISCELLANEOUS,
+)
 from app.rag import get_rag  # noqa: E402
 
 # Numbered publications — these land on their pages by filename inference.
@@ -61,23 +66,32 @@ INFERRED = [
     "ARN43758-AR 27-1-000-WEB-1.pdf",
 ]
 
-# Stand-in for the Master Library folder: no publication numbering to read, so
-# these are filed explicitly rather than guessed at.
-MASTER_LIBRARY = [
+# The reading collection: chosen titles, filed by hand. Nothing routes a document
+# here, which is the point — being a textbook is not something a filename says.
+DISCIPLINE_LIBRARY = [
+    "Advances in Financial Machine Learning.pdf",
+    "Cost Estimation Methods and Tools.pdf",
+    "Designing Data-Intensive Applications.pdf",
+    "Python for Algorithmic Trading.pdf",
+]
+
+# The rest of the same folder, filed on Miscellaneous at upload time. The last two
+# name a publication in their filename: filing them deliberately is what stops them
+# reaching the Engineering index dressed as the regulation they only quote.
+FILED_MISCELLANEOUS = [
     "Steel Construction Manual 15th Edition.pdf",
-    "Concrete Mix Design Fundamentals.pdf",
     "Geotechnical Engineering Handbook.pdf",
-    "Hydrology for Civil Engineers.pdf",
-    "Structural Dynamics Course Notes.pdf",
-    "Soil Mechanics Reference Tables.pdf",
-    "Surveying Methods and Practice.pdf",
-    "Electrical Systems Design Guide.pdf",
-    "HVAC Load Calculation Workbook.pdf",
-    "Cost Estimating Field Reference.pdf",
     "Sacramento District Lessons Learned.pdf",
     "Submittal Review Checklist.pdf",
-    "UFC 4-010-01 Training Extract.pdf",  # would infer engineering on its own
-    "AR 420-1 Class Handout.pdf",  # would infer engineering on its own
+    "UFC 4-010-01 Training Extract.pdf",
+    "AR 420-1 Class Handout.pdf",
+]
+
+# Uploaded with no page named at all. Nothing can be inferred from these, so they
+# fall to Miscellaneous rather than into one of the collections.
+UNFILED = [
+    "Scanned Meeting Notes 12 MAR.pdf",
+    "district_contact_list_v4.pdf",
 ]
 
 
@@ -105,10 +119,17 @@ def seed() -> None:
         metas.append(meta)
         vectors.append([0.0] * 8)
 
-    for i, source in enumerate(INFERRED):
-        add(i, source, None)
-    for i, source in enumerate(MASTER_LIBRARY, start=len(INFERRED)):
-        add(i, source, DISCIPLINE_KNOWLEDGE)
+    batches = (
+        (INFERRED, None),
+        (DISCIPLINE_LIBRARY, DISCIPLINE_KNOWLEDGE),
+        (FILED_MISCELLANEOUS, MISCELLANEOUS),
+        (UNFILED, None),
+    )
+    index = 0
+    for sources, group in batches:
+        for source in sources:
+            add(index, source, group)
+            index += 1
 
     collection.add(ids=ids, documents=docs, metadatas=metas, embeddings=vectors)
     rag._invalidate_caches()  # noqa: SLF001
@@ -122,7 +143,12 @@ def main() -> int:
 
     from app.main import app
 
-    print(f"Seeded {len(INFERRED)} inferred + {len(MASTER_LIBRARY)} explicitly filed documents")
+    print(
+        f"Seeded {len(INFERRED)} inferred publications, "
+        f"{len(DISCIPLINE_LIBRARY)} filed on the reading collection, "
+        f"{len(FILED_MISCELLANEOUS)} filed on Miscellaneous, "
+        f"{len(UNFILED)} with no page named"
+    )
     print(f"Sign in as: {DEMO_USER}")
     print(f"Serving on http://127.0.0.1:{port}")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

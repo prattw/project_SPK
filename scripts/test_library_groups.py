@@ -61,10 +61,12 @@ rag_module.embed_query = embeddings.embed_query
 
 from app.config import settings  # noqa: E402
 from app.library_groups import (  # noqa: E402
+    CATEGORY_GROUPS,
     CONTRACTING_LAW,
     DISCIPLINE_KNOWLEDGE,
     ENGINEERING,
     GROUP_META_KEY,
+    MISCELLANEOUS,
     group_summary,
     library_group,
     load_group_overrides,
@@ -139,8 +141,23 @@ check(
     library_group("acquisition-regulation", "FAR", "FAR.pdf") == CONTRACTING_LAW,
 )
 check(
-    "unrecognized document still defaults",
-    library_group(None, None, "Some Handbook.pdf") == DISCIPLINE_KNOWLEDGE,
+    "unrecognized document goes to miscellaneous, not the reading collection",
+    library_group(None, None, "Some Handbook.pdf") == MISCELLANEOUS,
+)
+check(
+    "a filename that looks like course material is still only a guess",
+    library_group("course-material", None, "004 FY26 Student Slides.pdf") == MISCELLANEOUS,
+)
+check(
+    "nothing routes a document into the reading collection by inference",
+    all(
+        library_group(category, None, "x.pdf") != DISCIPLINE_KNOWLEDGE
+        for category in (*CATEGORY_GROUPS, "misc", "course-material", None, "", "nonsense")
+    ),
+)
+check(
+    "assignment is the only way onto the reading collection",
+    library_group("misc", None, "x.pdf", assigned=DISCIPLINE_KNOWLEDGE) == DISCIPLINE_KNOWLEDGE,
 )
 
 # An exact-filename override is narrower than a batch assignment, so it wins.
@@ -555,69 +572,95 @@ else:
     check("non-admin cannot even sign in", other.status_code in {401, 403})
 
 
-# A curated page has to be able to hold only what was filed there on purpose,
-# both retroactively and for everything indexed afterwards.
-section("Keeping a curated page free of documents nobody filed there")
+# A bulk upload of mixed material must leave the reading collection alone and put
+# everything it could not place on its own page.
+section("A stray lands on Miscellaneous, never in the reading collection")
 
 clear_incoming()
 reset_manifest()
-save_incoming_upload(text_file("x"), "Curated Steel Manual.txt", "discipline-knowledge")
+save_incoming_upload(text_file("x"), "Designing Data-Intensive Applications.txt", "discipline-knowledge")
 save_incoming_upload(text_file("x"), "Random Meeting Notes.txt", None)
+save_incoming_upload(text_file("x"), "004 FY26 Student Slides.txt", None)
 run_library_ingest(library_incoming_path())
 
 page = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth).json()
 sources = {d["source"] for d in page["documents"]}
-check("a deliberately filed document is on the page", "Curated Steel Manual.txt" in sources)
-check("an un-inferable document landed there too", "Random Meeting Notes.txt" in sources)
-check("the page reports both populations", page["assigned_count"] >= 1 and page["inferred_count"] >= 1,
+check("the chosen title is on the reading collection", "Designing Data-Intensive Applications.txt" in sources)
+check("the stray is not", "Random Meeting Notes.txt" not in sources, str(sorted(sources)))
+check("nor is the document that merely looks like course material",
+      "004 FY26 Student Slides.txt" not in sources, str(sorted(sources)))
+check("the reading collection holds only what was filed there", page["inferred_count"] == 0,
       f"assigned={page['assigned_count']} inferred={page['inferred_count']}")
 
+misc = client.get(f"/library/groups/{MISCELLANEOUS}", headers=auth).json()
+misc_sources = {d["source"] for d in misc["documents"]}
+check("the stray is on Miscellaneous Documents", "Random Meeting Notes.txt" in misc_sources, str(sorted(misc_sources)))
+check("so is the course-material guess", "004 FY26 Student Slides.txt" in misc_sources)
+check("Miscellaneous is labelled for people, not for the code",
+      misc["label"] == "Miscellaneous Documents", misc["label"])
+check("nothing on Miscellaneous was filed there on purpose", misc["assigned_count"] == 0,
+      f"assigned={misc['assigned_count']}")
+
+# Promoting a stray that turns out to belong in the collection is the common
+# correction, and it must be possible without re-embedding or renaming anything.
 resp = client.post(
     "/admin/library/regroup",
     headers=auth,
     json={
-        "group": "engineering",
-        "from_group": "discipline-knowledge",
-        "inferred_only": True,
+        "group": "discipline-knowledge",
+        "patterns": ["Student Slides"],
         "dry_run": True,
     },
 )
+check("a stray can be promoted by pattern", resp.status_code == 200, resp.text)
+would = set(resp.json().get("would_move", []))
+check("the promotion picks the right document", would == {"004 FY26 Student Slides.txt"}, str(sorted(would)))
+check("a dry run moves nothing", resp.json()["dry_run"] is True)
+check("the dry run left Miscellaneous alone",
+      {d["source"] for d in client.get(f"/library/groups/{MISCELLANEOUS}", headers=auth).json()["documents"]}
+      == misc_sources)
+
+client.post(
+    "/admin/library/regroup",
+    headers=auth,
+    json={"group": "discipline-knowledge", "patterns": ["Student Slides"]},
+)
+page = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth).json()
+check("the promoted document joins the collection",
+      "004 FY26 Student Slides.txt" in {d["source"] for d in page["documents"]})
+check("and counts as filed on purpose, not inferred", page["inferred_count"] == 0,
+      f"assigned={page['assigned_count']} inferred={page['inferred_count']}")
+check("it is no longer on Miscellaneous",
+      "004 FY26 Student Slides.txt" not in
+      {d["source"] for d in client.get(f"/library/groups/{MISCELLANEOUS}", headers=auth).json()["documents"]})
+
+# Sweeping a whole page is the bulk form of the same correction.
+section("Sweeping a page, sparing what was filed there")
+
+resp = client.post(
+    "/admin/library/regroup",
+    headers=auth,
+    json={"group": "engineering", "from_group": "miscellaneous", "inferred_only": True, "dry_run": True},
+)
 check("sweeping a page by inference is accepted", resp.status_code == 200, resp.text)
 would = set(resp.json().get("would_move", []))
-check("the sweep takes the un-inferable document", "Random Meeting Notes.txt" in would, str(sorted(would)))
-check("the sweep spares the deliberately filed one", "Curated Steel Manual.txt" not in would, str(sorted(would)))
-check("a dry run moves nothing", resp.json()["dry_run"] is True)
-
-after = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth).json()
-check("the dry run left the page alone", {d["source"] for d in after["documents"]} == sources)
+check("the sweep takes the stray", "Random Meeting Notes.txt" in would, str(sorted(would)))
 
 resp = client.post(
     "/admin/library/regroup",
     headers=auth,
     json={"group": "engineering", "from_group": "discipline-knowledge", "inferred_only": True},
 )
-check("the sweep succeeds", resp.status_code == 200, resp.text)
+check("sweeping a page nobody drifted onto is a 400, not a silent no-op",
+      resp.status_code == 400, resp.text)
 
-page = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth).json()
-sources = {d["source"] for d in page["documents"]}
-check("only deliberately filed documents remain", "Random Meeting Notes.txt" not in sources, str(sorted(sources)))
-check("the curated document stayed", "Curated Steel Manual.txt" in sources)
-check("nothing on the page is there by inference", page["inferred_count"] == 0,
-      f"inferred={page['inferred_count']}")
-check("the swept document is on its new page",
-      "Random Meeting Notes.txt" in {
-          d["source"] for d in client.get(f"/library/groups/{ENGINEERING}", headers=auth).json()["documents"]
-      })
-
-# Without from_group the whole page moves, curated documents included, so the two
-# selectors must not be confused with one another.
 resp = client.post(
     "/admin/library/regroup",
     headers=auth,
     json={"group": "engineering", "from_group": "discipline-knowledge", "dry_run": True},
 )
-check("sweeping without inferred_only takes everything",
-      "Curated Steel Manual.txt" in set(resp.json()["would_move"]), resp.text)
+check("without inferred_only the same sweep takes the filed documents",
+      "Designing Data-Intensive Applications.txt" in set(resp.json()["would_move"]), resp.text)
 
 resp = client.post(
     "/admin/library/regroup", headers=auth, json={"group": "engineering", "from_group": "nope"}
@@ -633,8 +676,8 @@ check("an empty from_group is a 400, not a silent no-op", resp.status_code == 40
 # the curated page curated without a redeploy.
 section("The fallback page can be moved without a redeploy")
 
-check("discipline knowledge is the built-in fallback",
-      library_group("some-unknown-category") == DISCIPLINE_KNOWLEDGE)
+check("miscellaneous is the built-in fallback",
+      library_group("some-unknown-category") == MISCELLANEOUS)
 
 (settings.data_path / "library_groups.json").write_text(
     json.dumps({"default": "engineering", "categories": {"misc": "engineering"}}), encoding="utf-8"
@@ -651,7 +694,7 @@ check("real publications are unaffected", library_group("ufc", "UFC 3-301-01") =
 )
 load_group_overrides(refresh=True)
 check("a bad fallback name is ignored rather than blanking the library",
-      library_group("some-unknown-category") == DISCIPLINE_KNOWLEDGE)
+      library_group("some-unknown-category") == MISCELLANEOUS)
 
 (settings.data_path / "library_groups.json").unlink()
 load_group_overrides(refresh=True)

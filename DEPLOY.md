@@ -225,7 +225,7 @@ curl -s "$SPK_URL/admin/library/incoming" -H "Authorization: Bearer $SPK_TOKEN"
 
 ## Document Library index pages
 
-The Document Library tab is split into four indexes. Each is deep-linkable, so
+The Document Library tab is split into five indexes. Each is deep-linkable, so
 you can bookmark or share a single index:
 
 | Index | URL | Contents |
@@ -233,15 +233,27 @@ you can bookmark or share a single index:
 | All Documents | `/#library` | Every indexed library document (build-time list) |
 | Government Engineering | `/#library/engineering` | ER, EM, EP, EC, ETL, ECB, UFC, TSPWG, Tri-Service, TM, MIL-STD, space planning, OM, PN, HQ policy memos, and engineering-series AR/PAM |
 | Government Contracting & Law | `/#library/contracting-law` | FAR, DFARS, AFARS, PGI, United States Code, UAI/UDG, IDaC, and legal/contracting/administrative AR/PAM |
-| Discipline Knowledge | `/#library/discipline-knowledge` | Textbooks, handbooks, course material, and professional references kept for study — filed here explicitly at upload time |
+| Discipline Knowledge | `/#library/discipline-knowledge` | Textbooks and professional references kept for study — filed here by hand, never by inference |
+| Miscellaneous Documents | `/#library/miscellaneous` | Everything that matched no publication convention and was not filed on a page |
 
-The three subject indexes render live from the search index, so documents appear
+The four subject indexes render live from the search index, so documents appear
 as soon as they are ingested — no `build_library_html.py` rebuild required.
 
-The first two indexes hold the publications people consult to do the work. The
-third, titled the William Held Pratt Memorial Engineering & Science Library, is a
-reading collection kept for study rather than daily reference, which is why it is
-curated by explicit assignment instead of by guessing at filenames.
+The first two hold the publications people consult to do the work. The third,
+titled the William Held Pratt Memorial Engineering & Science Library, is a reading
+collection kept for study rather than daily reference; nothing routes a document
+there, because no filename can say that a book was chosen for the collection.
+
+That leaves documents nothing could be inferred about, and Miscellaneous Documents
+is where they go. Each of the other three is defined by what it holds, so none can
+absorb the unclassifiable without becoming a poorer description of itself. A page
+of its own keeps those documents browsable and searchable while saying plainly
+that nobody has filed them.
+
+**On first deploy** every document currently sitting on an index because it fell
+through to a default moves to Miscellaneous Documents. Nothing is deleted and
+nothing leaves the search index — expect the Discipline Knowledge count to drop to
+whatever has actually been filed there, which is nothing until you file something.
 
 ### API
 
@@ -259,16 +271,16 @@ curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/files?group=contracting-law
 ### Filing a whole folder on one index page
 
 Routing by filename only works for documents that follow a publication naming
-convention. A folder of discipline references — textbooks, handbooks, course
-decks, district guidance — has no convention to read, so tell the upload where
-the documents belong instead of hoping inference gets it right:
+convention. A folder of textbooks and references has no convention to read, so
+tell the upload where the documents belong instead of hoping inference gets it
+right:
 
 ```bash
 export SPK_URL="https://YOUR-APP.up.railway.app"
 export SPK_TOKEN="paste-token-here"
 
 python3 scripts/zip_upload_library.py "$HOME/Documents/Master Library" \
-  --group discipline-knowledge
+  --group miscellaneous
 ```
 
 On Windows, PowerShell sets variables differently and the interpreter is `python`,
@@ -278,11 +290,16 @@ not `python3`. Quote the folder — these paths contain spaces:
 $env:SPK_URL = "https://YOUR-APP.up.railway.app"
 $env:SPK_TOKEN = "paste-token-here"
 
-python scripts\zip_upload_library.py "C:\Users\CYRUS\Documents\Master Library" --group discipline-knowledge
+python scripts\zip_upload_library.py "C:\Users\CYRUS\Documents\Master Library" --group miscellaneous
 ```
 
 Add `--dry-run` to either form to list what would be uploaded without sending
 anything.
+
+Naming a page even for the leftovers is worth doing. Without `--group`, any file
+whose name happens to mention a publication — `AR 420-1 Class Handout.pdf` — is
+routed to that publication's index and shown as the regulation it merely quotes.
+Filing the batch deliberately stops that at the door.
 
 The group is recorded against each queued file, so the ingest that follows needs
 no extra flag:
@@ -314,8 +331,29 @@ curl -s -X POST "$SPK_URL/admin/library/ingest" \
 ```
 
 An assigned group outranks every form of inference. Valid names are
-`engineering`, `contracting-law`, and `discipline-knowledge`; anything else is a
-400 listing the valid ones, so a typo cannot silently misfile a batch.
+`engineering`, `contracting-law`, `discipline-knowledge`, and `miscellaneous`;
+anything else is a 400 listing the valid ones, so a typo cannot silently misfile a
+batch.
+
+### Adding titles to the Pratt library
+
+The Pratt library is a chosen collection, so filing is the only way in. Upload the
+folder onto Miscellaneous as above, then name the titles that belong in the
+collection:
+
+```bash
+# Check the match before moving anything — patterns are deliberately broad
+curl -s -X POST "$SPK_URL/admin/library/regroup" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"group":"discipline-knowledge","dry_run":true,"patterns":[
+        "Advances in","Cost Estimation","Designing Data","Algorithmic Trading"]}'
+
+# Then drop dry_run
+```
+
+`would_move` lists exactly what each pattern caught. Widen or narrow the patterns
+until that list is the collection you want, then run it for real. Use `sources`
+with exact filenames instead when you know them.
 
 ### Moving documents that are already indexed
 
@@ -338,34 +376,30 @@ curl -s -X POST "$SPK_URL/admin/library/regroup" \
 `sources` takes exact indexed filenames; `patterns` matches substrings against
 them. Use `dry_run` first — pattern matching is deliberately broad.
 
-### Keeping an index page to exactly what you filed there
+### Sweeping a whole page
 
-Discipline Knowledge is also the fallback page for any document whose filename
-inference comes up empty, so it accumulates strays. That is fine for a catch-all
-and wrong for a curated collection. `GET /library/groups/discipline-knowledge`
-reports `assigned_count` (filed there on purpose) next to `inferred_count`
-(landed there by a rule), so you can see which one a page has become.
-
-To clear the strays without touching the documents you filed deliberately, select
-by the page they are on rather than by name, and move them somewhere else:
+`from_group` selects everything currently on a page, which is the bulk form of the
+same correction — useful for emptying Miscellaneous Documents into a subject index
+once you have looked at what is on it:
 
 ```bash
 # What is on the page that nobody filed there?
 curl -s -X POST "$SPK_URL/admin/library/regroup" \
   -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
-  -d '{"group":"engineering","from_group":"discipline-knowledge","inferred_only":true,"dry_run":true}'
-
-# Move them
-curl -s -X POST "$SPK_URL/admin/library/regroup" \
-  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
-  -d '{"group":"engineering","from_group":"discipline-knowledge","inferred_only":true}'
+  -d '{"group":"engineering","from_group":"miscellaneous","inferred_only":true,"dry_run":true}'
 ```
 
-Drop `inferred_only` and `from_group` takes the whole page, deliberate filings
-included — so keep it unless you mean that.
+`inferred_only` spares the documents that were filed on that page deliberately.
+Drop it and `from_group` takes the whole page, deliberate filings included — so
+keep it unless you mean that.
 
-That clears what is already indexed. To stop the next un-inferable upload from
-landing there, move the fallback page itself in `{DATA_DIR}/library_groups.json`:
+`GET /library/groups/<page>` reports `assigned_count` (filed there on purpose) next
+to `inferred_count` (landed there by a rule), which is how you tell a collection
+from a catch-all. Discipline Knowledge should always read `inferred_count: 0`,
+since nothing routes a document there.
+
+The fallback page itself can be moved without a redeploy, in
+`{DATA_DIR}/library_groups.json`:
 
 ```json
 {
@@ -376,9 +410,10 @@ landing there, move the fallback page itself in `{DATA_DIR}/library_groups.json`
 
 `default` catches documents with no category at all; the `categories` entries
 catch `misc` (nothing could be inferred) and `course-material` (the filename
-looked like training material). With both set, a document reaches Discipline
-Knowledge only by being filed there on purpose. An unrecognized page name in this
-file is ignored rather than applied, so a typo cannot empty a page.
+looked like training material). All three go to Miscellaneous Documents out of the
+box, so this is only needed if you would rather they landed elsewhere. An
+unrecognized page name in this file is ignored rather than applied, so a typo
+cannot empty a page.
 
 ### Retuning which index a document lands in
 
@@ -401,10 +436,14 @@ assigned at upload time, then the longest `doc_number_prefixes` match, then
 `categories`, then the built-in rules. An exact filename beats a batch assignment
 because it is the narrower statement of the two.
 
-Valid group names are `engineering`, `contracting-law`, and
-`discipline-knowledge`; unknown names and malformed JSON are ignored so a bad
-edit cannot blank out an index. The file is read once per process, so restart the
+Valid group names are `engineering`, `contracting-law`, `discipline-knowledge`,
+and `miscellaneous`; unknown names and malformed JSON are ignored so a bad edit
+cannot blank out an index. The file is read once per process, so restart the
 service (or redeploy) to pick up changes.
+
+Pointing a `categories` or `doc_number_prefixes` rule at `discipline-knowledge`
+does work, but it makes the reading collection something a filename can route into
+— which is the property the collection exists without.
 
 ## Verify deployment
 

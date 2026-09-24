@@ -399,7 +399,7 @@ def _documents_with_urls() -> list[dict]:
 @app.get("/files", response_model=FilesResponse)
 def list_files(
     request: Request,
-    group: str | None = Query(default=None, description="Library index page: engineering | contracting-law | discipline-knowledge"),
+    group: str | None = Query(default=None, description="Library index page: engineering | contracting-law | discipline-knowledge | miscellaneous"),
     origin: str | None = Query(default=None, description="Filter by upload origin: library | user"),
 ) -> FilesResponse:
     require_api_key(request)
@@ -428,7 +428,7 @@ def list_files(
 
 @app.get("/library/groups")
 def list_library_groups(request: Request) -> dict:
-    """Document counts for each of the three Document Library index pages."""
+    """Document counts for each Document Library index page."""
     require_api_key(request)
     library_docs = [
         d for d in _documents_with_urls() if (d.get("upload_origin") or "") == "library"
@@ -441,7 +441,7 @@ def list_library_groups(request: Request) -> dict:
 
 @app.get("/library/groups/{group}")
 def list_library_group(request: Request, group: str) -> dict:
-    """The document index for one library page (Engineering, Contracting & Law, Discipline Knowledge)."""
+    """The document index for one library page."""
     require_api_key(request)
     wanted_group = normalize_group(group)
     if not wanted_group:
