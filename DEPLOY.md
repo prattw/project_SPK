@@ -280,7 +280,7 @@ export SPK_URL="https://YOUR-APP.up.railway.app"
 export SPK_TOKEN="paste-token-here"
 
 python3 scripts/zip_upload_library.py "$HOME/Documents/Master Library" \
-  --group miscellaneous
+  --group miscellaneous --ingest
 ```
 
 On Windows, PowerShell sets variables differently and the interpreter is `python`,
@@ -290,11 +290,12 @@ not `python3`. Quote the folder — these paths contain spaces:
 $env:SPK_URL = "https://YOUR-APP.up.railway.app"
 $env:SPK_TOKEN = "paste-token-here"
 
-python scripts\zip_upload_library.py "C:\Users\CYRUS\Documents\Master Library" --group miscellaneous
+python scripts\zip_upload_library.py "C:\Users\CYRUS\Documents\Master Library" --group miscellaneous --ingest
 ```
 
 Add `--dry-run` to either form to list what would be uploaded without sending
-anything.
+anything. `--ingest` indexes the batch and follows the job to the end, printing
+progress and any per-file failures; leave it off to upload now and index later.
 
 Naming a page even for the leftovers is worth doing. Without `--group`, any file
 whose name happens to mention a publication — `AR 420-1 Class Handout.pdf` — is
@@ -342,18 +343,22 @@ folder onto Miscellaneous as above, then name the titles that belong in the
 collection:
 
 ```bash
-# Check the match before moving anything — patterns are deliberately broad
-curl -s -X POST "$SPK_URL/admin/library/regroup" \
-  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
-  -d '{"group":"discipline-knowledge","dry_run":true,"patterns":[
-        "Advances in","Cost Estimation","Designing Data","Algorithmic Trading"]}'
-
-# Then drop dry_run
+python3 scripts/file_library_documents.py --group discipline-knowledge \
+  --matching "Advances in" --matching "Cost Estimation" \
+  --matching "Designing Data" --matching "Algorithmic Trading"
 ```
 
-`would_move` lists exactly what each pattern caught. Widen or narrow the patterns
-until that list is the collection you want, then run it for real. Use `sources`
-with exact filenames instead when you know them.
+That prints the titles it would move and writes nothing. `--matching` is a
+substring search, so widen or narrow the patterns until the printed list is the
+collection you want, then run the same command again with `--apply`. Use
+`--source` with an exact filename instead when you know it.
+
+On Windows the interpreter is `python`, and PowerShell needs the line breaks
+written as backticks — or just put it on one line:
+
+```powershell
+python scripts\file_library_documents.py --group discipline-knowledge --matching "Advances in" --matching "Cost Estimation" --matching "Designing Data" --matching "Algorithmic Trading"
+```
 
 ### Moving documents that are already indexed
 
@@ -363,18 +368,18 @@ index holds thousands of documents:
 
 ```bash
 # See what would move, change nothing
-curl -s -X POST "$SPK_URL/admin/library/regroup" \
-  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
-  -d '{"group":"discipline-knowledge","patterns":["Student Slides"],"dry_run":true}'
+python3 scripts/file_library_documents.py --group discipline-knowledge \
+  --matching "Student Slides"
 
 # Do it
-curl -s -X POST "$SPK_URL/admin/library/regroup" \
-  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
-  -d '{"group":"discipline-knowledge","sources":["004 FY26 Student Slides.pdf"]}'
+python3 scripts/file_library_documents.py --group discipline-knowledge \
+  --source "004 FY26 Student Slides.pdf" --apply
 ```
 
-`sources` takes exact indexed filenames; `patterns` matches substrings against
-them. Use `dry_run` first — pattern matching is deliberately broad.
+`--source` takes exact indexed filenames; `--matching` matches substrings against
+them. Both are repeatable and can be combined. The endpoint behind this is
+`POST /admin/library/regroup`, which takes `sources`, `patterns`, `from_group`,
+`inferred_only` and `dry_run` if you would rather call it directly.
 
 ### Sweeping a whole page
 
@@ -384,13 +389,12 @@ once you have looked at what is on it:
 
 ```bash
 # What is on the page that nobody filed there?
-curl -s -X POST "$SPK_URL/admin/library/regroup" \
-  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
-  -d '{"group":"engineering","from_group":"miscellaneous","inferred_only":true,"dry_run":true}'
+python3 scripts/file_library_documents.py --group engineering \
+  --from-group miscellaneous --inferred-only
 ```
 
-`inferred_only` spares the documents that were filed on that page deliberately.
-Drop it and `from_group` takes the whole page, deliberate filings included — so
+`--inferred-only` spares the documents that were filed on that page deliberately.
+Drop it and `--from-group` takes the whole page, deliberate filings included — so
 keep it unless you mean that.
 
 `GET /library/groups/<page>` reports `assigned_count` (filed there on purpose) next
