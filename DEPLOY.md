@@ -262,18 +262,18 @@ the documents belong instead of hoping inference gets it right:
 export SPK_URL="https://YOUR-APP.up.railway.app"
 export SPK_TOKEN="paste-token-here"
 
-python3 scripts/zip_upload_library.py "$HOME/Documents/Project SPK folder (18SEP26)/Master Library" \
+python3 scripts/zip_upload_library.py "$HOME/Documents/Master Library" \
   --group discipline-knowledge
 ```
 
 On Windows, PowerShell sets variables differently and the interpreter is `python`,
-not `python3`. Quote the folder — the paths in use contain spaces and parentheses:
+not `python3`. Quote the folder — these paths contain spaces:
 
 ```powershell
 $env:SPK_URL = "https://YOUR-APP.up.railway.app"
 $env:SPK_TOKEN = "paste-token-here"
 
-python scripts\zip_upload_library.py "C:\Users\CYRUS\Documents\Project SPK folder (18SEP26)\Master Library" --group discipline-knowledge
+python scripts\zip_upload_library.py "C:\Users\CYRUS\Documents\Master Library" --group discipline-knowledge
 ```
 
 Add `--dry-run` to either form to list what would be uploaded without sending
