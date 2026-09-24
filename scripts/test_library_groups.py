@@ -266,6 +266,30 @@ check("page counts reflect the assignment",
 
 
 # ---------------------------------------------------------------------------
+section("A split document's parts follow it, and its manifest entry clears")
+
+clear_incoming()
+reset_manifest()
+
+# Stand in for the output of split_oversized_pdfs: the oversized original is gone
+# and only its page-range parts remain, under names nobody uploaded.
+record_incoming_group("Big Design Guide.txt", "discipline-knowledge")
+(library_incoming_path() / "Big Design Guide__p00001-00500.txt").write_bytes(text_file("a"))
+(library_incoming_path() / "Big Design Guide__p00501-01000.txt").write_bytes(text_file("b"))
+
+report = run_library_ingest(library_incoming_path())
+check("both parts indexed", report.files_indexed == 2, f"got {report.files_indexed}")
+check("both parts filed with the parent", report.grouped_files.get(DISCIPLINE_KNOWLEDGE) == 2, str(report.grouped_files))
+
+docs = {d["source"]: d for d in get_rag().list_documents()}
+check("first part on the discipline page",
+      docs["Big Design Guide__p00001-00500.txt"]["library_group"] == DISCIPLINE_KNOWLEDGE)
+check("second part on the discipline page",
+      docs["Big Design Guide__p00501-01000.txt"]["library_group"] == DISCIPLINE_KNOWLEDGE)
+check("the vanished parent leaves no stale entry", read_incoming_groups() == {}, str(read_incoming_groups()))
+
+
+# ---------------------------------------------------------------------------
 section("A batch default files untagged files")
 
 clear_incoming()
@@ -410,9 +434,19 @@ check("UFC extract counted as discipline, not engineering", counts[DISCIPLINE_KN
 
 resp = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth)
 check("discipline page ok", resp.status_code == 200, resp.text)
-sources = {d["source"] for d in resp.json()["documents"]}
+page = resp.json()
+sources = {d["source"] for d in page["documents"]}
 check("uploaded handbook on the page", "Concrete Handbook.txt" in sources, str(sorted(sources)))
 check("UFC extract on the page too", "UFC 4-010-01 Extract.txt" in sources, str(sorted(sources)))
+check("page separates deliberate filing from inference",
+      page["assigned_count"] + page["inferred_count"] == page["count"], str(page)[:200])
+check("the documents we filed are counted as assigned", page["assigned_count"] >= 6, str(page["assigned_count"]))
+
+# Engineering holds one document this test moved back by hand; the rest got there
+# by filename inference, and the counts have to tell those apart.
+eng_page = client.get(f"/library/groups/{ENGINEERING}", headers=auth).json()
+check("engineering counts the one deliberate move", eng_page["assigned_count"] == 1, str(eng_page["assigned_count"]))
+check("engineering still has inferred documents", eng_page["inferred_count"] >= 1, str(eng_page["inferred_count"]))
 
 # Regroup an already-indexed document.
 resp = client.post(

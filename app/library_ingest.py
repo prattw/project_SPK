@@ -390,8 +390,11 @@ def run_library_ingest(
 
     # Files are moved out of library-incoming as they are staged, so their
     # manifest entries are now stale; leaving them would misfile a later upload
-    # that happens to reuse a filename.
-    forget_incoming_groups([Path(p).name for p in paths])
+    # that happens to reuse a filename. A split PDF is gone too, even though
+    # only its parts appear in `paths`, so clear the parent entry as well.
+    done = [Path(p).name for p in paths]
+    done += [parent for name in done if (parent := _part_parent_name(name))]
+    forget_incoming_groups(done)
 
     return report
 

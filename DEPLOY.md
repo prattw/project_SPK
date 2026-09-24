@@ -233,7 +233,7 @@ you can bookmark or share a single index:
 | All Documents | `/#library` | Every indexed library document (build-time list) |
 | Government Engineering | `/#library/engineering` | ER, EM, EP, EC, ETL, ECB, UFC, TSPWG, Tri-Service, TM, MIL-STD, space planning, OM, PN, HQ policy memos, and engineering-series AR/PAM |
 | Government Contracting & Law | `/#library/contracting-law` | FAR, DFARS, AFARS, PGI, United States Code, UAI/UDG, IDaC, and legal/contracting/administrative AR/PAM |
-| Discipline Knowledge | `/#library/discipline-knowledge` | Course material, training slides, and discipline references that are not numbered publications |
+| Discipline Knowledge | `/#library/discipline-knowledge` | Course material, training slides, and discipline references that are not numbered publications — plus anything filed here explicitly at upload time |
 
 The three subject indexes render live from the search index, so documents appear
 as soon as they are ingested — no `build_library_html.py` rebuild required.
@@ -251,12 +251,88 @@ curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/library/groups/engineering"
 curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/files?group=contracting-law&origin=library"
 ```
 
+### Filing a whole folder on one index page
+
+Routing by filename only works for documents that follow a publication naming
+convention. A folder of discipline references — textbooks, handbooks, course
+decks, district guidance — has no convention to read, so tell the upload where
+the documents belong instead of hoping inference gets it right:
+
+```bash
+export SPK_URL="https://YOUR-APP.up.railway.app"
+export SPK_TOKEN="paste-token-here"
+
+python3 scripts/zip_upload_library.py "D:/Project SPK folder (18SEP26)/Master Library" \
+  --group discipline-knowledge
+```
+
+The group is recorded against each queued file, so the ingest that follows needs
+no extra flag:
+
+```bash
+curl -s -X POST "$SPK_URL/admin/library/ingest" -H "Authorization: Bearer $SPK_TOKEN"
+```
+
+Because the assignment lives in a manifest inside `library-incoming` rather than
+in the ingest request, it survives an upload split across several sessions and an
+ingest that crashes and resumes — including `scripts/robust_library_ingest.py`,
+which needs no changes to preserve it. An oversized PDF that gets split into
+page-range parts passes its assignment down to every part.
+
+`GET /admin/library/incoming` shows the assignment per queued file and a
+`by_group` tally, so you can confirm the filing before spending hours indexing.
+
+Individual uploads and a batch-wide default work the same way:
+
+```bash
+# One document
+curl -s -X POST "$SPK_URL/admin/library/upload?group=discipline-knowledge" \
+  -H "Authorization: Bearer $SPK_TOKEN" -F "file=@Handbook.pdf"
+
+# Everything queued that has no assignment of its own
+curl -s -X POST "$SPK_URL/admin/library/ingest" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"group":"discipline-knowledge"}'
+```
+
+An assigned group outranks every form of inference. Valid names are
+`engineering`, `contracting-law`, and `discipline-knowledge`; anything else is a
+400 listing the valid ones, so a typo cannot silently misfile a batch.
+
+### Moving documents that are already indexed
+
+Correcting where a document files does not require re-embedding it.
+`/admin/library/regroup` rewrites chunk metadata in place, which matters when the
+index holds thousands of documents:
+
+```bash
+# See what would move, change nothing
+curl -s -X POST "$SPK_URL/admin/library/regroup" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"group":"discipline-knowledge","patterns":["Student Slides"],"dry_run":true}'
+
+# Do it
+curl -s -X POST "$SPK_URL/admin/library/regroup" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"group":"discipline-knowledge","sources":["004 FY26 Student Slides.pdf"]}'
+```
+
+`sources` takes exact indexed filenames; `patterns` matches substrings against
+them. Use `dry_run` first — pattern matching is deliberately broad.
+
+Discipline Knowledge is also the fallback page for any document whose filename
+inference comes up empty, so it can accumulate strays. `GET
+/library/groups/discipline-knowledge` reports `assigned_count` (filed there on
+purpose) alongside `inferred_count` (landed there by a rule), which is how you
+tell a curated page from a catch-all and find what to move.
+
 ### Retuning which index a document lands in
 
-Documents are routed by the `category` inferred from their filename, and AR/PAM
-are routed by series number (AR 420-1 is facilities engineering; AR 27-1 is legal
-services). To change the routing without a redeploy, drop a `library_groups.json`
-file in the data volume (`/data/files/library_groups.json`):
+Documents with no assignment are routed by the `category` inferred from their
+filename, and AR/PAM are routed by series number (AR 420-1 is facilities
+engineering; AR 27-1 is legal services). To change that routing without a
+redeploy, drop a `library_groups.json` file in the data volume
+(`/data/files/library_groups.json`):
 
 ```json
 {
@@ -266,8 +342,12 @@ file in the data volume (`/data/files/library_groups.json`):
 }
 ```
 
-Precedence is exact `sources` match, then longest `doc_number_prefixes` match,
-then `categories`. Valid group names are `engineering`, `contracting-law`, and
+Full precedence, most specific first: an exact `sources` match, then the group
+assigned at upload time, then the longest `doc_number_prefixes` match, then
+`categories`, then the built-in rules. An exact filename beats a batch assignment
+because it is the narrower statement of the two.
+
+Valid group names are `engineering`, `contracting-law`, and
 `discipline-knowledge`; unknown names and malformed JSON are ignored so a bad
 edit cannot blank out an index. The file is read once per process, so restart the
 service (or redeploy) to pick up changes.

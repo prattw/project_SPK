@@ -418,11 +418,16 @@ def list_library_group(request: Request, group: str) -> dict:
         if (d.get("upload_origin") or "") == "library"
         and d.get("library_group") == wanted_group
     ]
+    # "Filed here on purpose" vs. "landed here because the filename matched a
+    # rule" is the difference between a curated page and a catch-all, so report it.
+    assigned = sum(1 for d in documents if normalize_group(d.get("assigned_group") or "") == wanted_group)
     return {
         "group": wanted_group,
         "label": GROUP_LABELS[wanted_group],
         "description": GROUP_DESCRIPTIONS[wanted_group],
         "count": len(documents),
+        "assigned_count": assigned,
+        "inferred_count": len(documents) - assigned,
         "documents": documents,
     }
 
