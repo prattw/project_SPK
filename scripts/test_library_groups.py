@@ -555,6 +555,108 @@ else:
     check("non-admin cannot even sign in", other.status_code in {401, 403})
 
 
+# A curated page has to be able to hold only what was filed there on purpose,
+# both retroactively and for everything indexed afterwards.
+section("Keeping a curated page free of documents nobody filed there")
+
+clear_incoming()
+reset_manifest()
+save_incoming_upload(text_file("x"), "Curated Steel Manual.txt", "discipline-knowledge")
+save_incoming_upload(text_file("x"), "Random Meeting Notes.txt", None)
+run_library_ingest(library_incoming_path())
+
+page = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth).json()
+sources = {d["source"] for d in page["documents"]}
+check("a deliberately filed document is on the page", "Curated Steel Manual.txt" in sources)
+check("an un-inferable document landed there too", "Random Meeting Notes.txt" in sources)
+check("the page reports both populations", page["assigned_count"] >= 1 and page["inferred_count"] >= 1,
+      f"assigned={page['assigned_count']} inferred={page['inferred_count']}")
+
+resp = client.post(
+    "/admin/library/regroup",
+    headers=auth,
+    json={
+        "group": "engineering",
+        "from_group": "discipline-knowledge",
+        "inferred_only": True,
+        "dry_run": True,
+    },
+)
+check("sweeping a page by inference is accepted", resp.status_code == 200, resp.text)
+would = set(resp.json().get("would_move", []))
+check("the sweep takes the un-inferable document", "Random Meeting Notes.txt" in would, str(sorted(would)))
+check("the sweep spares the deliberately filed one", "Curated Steel Manual.txt" not in would, str(sorted(would)))
+check("a dry run moves nothing", resp.json()["dry_run"] is True)
+
+after = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth).json()
+check("the dry run left the page alone", {d["source"] for d in after["documents"]} == sources)
+
+resp = client.post(
+    "/admin/library/regroup",
+    headers=auth,
+    json={"group": "engineering", "from_group": "discipline-knowledge", "inferred_only": True},
+)
+check("the sweep succeeds", resp.status_code == 200, resp.text)
+
+page = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth).json()
+sources = {d["source"] for d in page["documents"]}
+check("only deliberately filed documents remain", "Random Meeting Notes.txt" not in sources, str(sorted(sources)))
+check("the curated document stayed", "Curated Steel Manual.txt" in sources)
+check("nothing on the page is there by inference", page["inferred_count"] == 0,
+      f"inferred={page['inferred_count']}")
+check("the swept document is on its new page",
+      "Random Meeting Notes.txt" in {
+          d["source"] for d in client.get(f"/library/groups/{ENGINEERING}", headers=auth).json()["documents"]
+      })
+
+# Without from_group the whole page moves, curated documents included, so the two
+# selectors must not be confused with one another.
+resp = client.post(
+    "/admin/library/regroup",
+    headers=auth,
+    json={"group": "engineering", "from_group": "discipline-knowledge", "dry_run": True},
+)
+check("sweeping without inferred_only takes everything",
+      "Curated Steel Manual.txt" in set(resp.json()["would_move"]), resp.text)
+
+resp = client.post(
+    "/admin/library/regroup", headers=auth, json={"group": "engineering", "from_group": "nope"}
+)
+check("an unknown from_group is a 400", resp.status_code == 400, resp.text)
+
+resp = client.post(
+    "/admin/library/regroup", headers=auth, json={"group": "engineering", "from_group": "contracting-law"}
+)
+check("an empty from_group is a 400, not a silent no-op", resp.status_code == 400, resp.text)
+
+# The fallback page is where un-inferable documents land next time. Moving it keeps
+# the curated page curated without a redeploy.
+section("The fallback page can be moved without a redeploy")
+
+check("discipline knowledge is the built-in fallback",
+      library_group("some-unknown-category") == DISCIPLINE_KNOWLEDGE)
+
+(settings.data_path / "library_groups.json").write_text(
+    json.dumps({"default": "engineering", "categories": {"misc": "engineering"}}), encoding="utf-8"
+)
+load_group_overrides(refresh=True)
+check("the fallback follows the override", library_group("some-unknown-category") == ENGINEERING)
+check("misc no longer lands on the curated page", library_group("misc") == ENGINEERING)
+check("an explicit assignment still wins over the override",
+      library_group("misc", assigned=DISCIPLINE_KNOWLEDGE) == DISCIPLINE_KNOWLEDGE)
+check("real publications are unaffected", library_group("ufc", "UFC 3-301-01") == ENGINEERING)
+
+(settings.data_path / "library_groups.json").write_text(
+    json.dumps({"default": "not-a-page"}), encoding="utf-8"
+)
+load_group_overrides(refresh=True)
+check("a bad fallback name is ignored rather than blanking the library",
+      library_group("some-unknown-category") == DISCIPLINE_KNOWLEDGE)
+
+(settings.data_path / "library_groups.json").unlink()
+load_group_overrides(refresh=True)
+
+
 # ---------------------------------------------------------------------------
 shutil.rmtree(_TMP, ignore_errors=True)
 

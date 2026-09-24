@@ -155,6 +155,17 @@ class LibraryRegroupRequest(BaseModel):
         max_length=50,
         description="Substrings matched against indexed filenames, as an alternative to listing them.",
     )
+    from_group: str | None = Field(
+        default=None,
+        description="Select every document currently on this index page, instead of naming them.",
+    )
+    inferred_only: bool = Field(
+        default=False,
+        description=(
+            "Narrow from_group to documents that landed there by filename inference, "
+            "leaving documents that were deliberately filed there alone."
+        ),
+    )
     dry_run: bool = Field(
         default=False,
         description="Report what would move without writing anything.",
@@ -887,29 +898,58 @@ def admin_library_incoming(request: Request) -> dict:
     return {"incoming_count": len(files), "files": files, "by_group": by_group}
 
 
+def _sources_on_page(group: str, *, inferred_only: bool = False) -> list[str]:
+    """Filenames of the library documents currently shown on one index page.
+
+    ``inferred_only`` keeps just the ones that landed there because their filename
+    matched a rule, which is how a curated page is swept clear of documents nobody
+    filed there on purpose without disturbing the ones who were.
+    """
+    sources = []
+    for doc in _documents_with_urls():
+        if (doc.get("upload_origin") or "") != "library":
+            continue
+        if doc.get("library_group") != group:
+            continue
+        if inferred_only and normalize_group(doc.get("assigned_group") or "") == group:
+            continue
+        source = doc.get("source")
+        if source:
+            sources.append(source)
+    return sources
+
+
 @app.post("/admin/library/regroup")
 def admin_library_regroup(request: Request, body: LibraryRegroupRequest) -> dict:
     """Move already-indexed documents to an index page (admin only).
 
     Correcting where a document files should not require re-embedding it, so this
-    rewrites chunk metadata in place. Accepts exact filenames or substring
-    patterns, and ``dry_run`` to see the effect first.
+    rewrites chunk metadata in place. Accepts exact filenames, substring patterns,
+    or ``from_group`` to take everything currently on one page — with
+    ``inferred_only`` to spare the documents deliberately filed there. ``dry_run``
+    reports the effect without writing.
     """
     require_api_key(request)
     _require_usage_admin(request)
 
     page = _require_group(body.group)
+    origin_page = _require_group(body.from_group)
     rag = get_rag()
 
     targets = list(body.sources or [])
     if body.patterns:
         targets.extend(rag.sources_matching(body.patterns))
+    if origin_page:
+        targets.extend(_sources_on_page(origin_page, inferred_only=body.inferred_only))
     targets = sorted(set(targets))
 
     if not targets:
         raise HTTPException(
             status_code=400,
-            detail="Nothing to move. Provide sources or patterns that match indexed documents.",
+            detail=(
+                "Nothing to move. Provide sources, patterns, or a from_group that "
+                "matches indexed documents."
+            ),
         )
 
     if body.dry_run:

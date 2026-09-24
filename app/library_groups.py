@@ -152,10 +152,15 @@ def load_group_overrides(*, refresh: bool = False) -> dict[str, Any]:
     Accepted shape (every key optional)::
 
         {
+          "default": "engineering",
           "categories": {"course-material": "engineering"},
           "doc_number_prefixes": {"AR 420": "engineering"},
           "sources": {"Some Exact Filename.pdf": "discipline-knowledge"}
         }
+
+    ``default`` moves the fallback page, which is what keeps a curated index from
+    collecting every document nothing could be inferred about. The rest map a
+    category, a doc-number prefix, or one exact filename to a page.
 
     Unknown group names are ignored so a typo cannot blank out a page.
     """
@@ -163,12 +168,18 @@ def load_group_overrides(*, refresh: bool = False) -> dict[str, Any]:
     if _overrides_cache is not None and not refresh:
         return _overrides_cache
 
-    overrides: dict[str, Any] = {"categories": {}, "doc_number_prefixes": {}, "sources": {}}
+    overrides: dict[str, Any] = {
+        "default": None,
+        "categories": {},
+        "doc_number_prefixes": {},
+        "sources": {},
+    }
     path = group_override_path()
     try:
         if path.is_file():
             raw = json.loads(path.read_text(encoding="utf-8"))
-            for key in overrides:
+            overrides["default"] = valid_group(raw.get("default"))
+            for key in ("categories", "doc_number_prefixes", "sources"):
                 section = raw.get(key)
                 if not isinstance(section, dict):
                     continue
@@ -257,7 +268,8 @@ def library_group(
     if normalized in AR_PAM_CATEGORIES:
         return _ar_pam_group(doc_number)
 
-    return CATEGORY_GROUPS.get(normalized, DEFAULT_GROUP)
+    fallback = overrides["default"] or DEFAULT_GROUP
+    return CATEGORY_GROUPS.get(normalized, fallback)
 
 
 def group_label(group: str) -> str:

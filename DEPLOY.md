@@ -333,11 +333,47 @@ curl -s -X POST "$SPK_URL/admin/library/regroup" \
 `sources` takes exact indexed filenames; `patterns` matches substrings against
 them. Use `dry_run` first — pattern matching is deliberately broad.
 
+### Keeping an index page to exactly what you filed there
+
 Discipline Knowledge is also the fallback page for any document whose filename
-inference comes up empty, so it can accumulate strays. `GET
-/library/groups/discipline-knowledge` reports `assigned_count` (filed there on
-purpose) alongside `inferred_count` (landed there by a rule), which is how you
-tell a curated page from a catch-all and find what to move.
+inference comes up empty, so it accumulates strays. That is fine for a catch-all
+and wrong for a curated collection. `GET /library/groups/discipline-knowledge`
+reports `assigned_count` (filed there on purpose) next to `inferred_count`
+(landed there by a rule), so you can see which one a page has become.
+
+To clear the strays without touching the documents you filed deliberately, select
+by the page they are on rather than by name, and move them somewhere else:
+
+```bash
+# What is on the page that nobody filed there?
+curl -s -X POST "$SPK_URL/admin/library/regroup" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"group":"engineering","from_group":"discipline-knowledge","inferred_only":true,"dry_run":true}'
+
+# Move them
+curl -s -X POST "$SPK_URL/admin/library/regroup" \
+  -H "Authorization: Bearer $SPK_TOKEN" -H "Content-Type: application/json" \
+  -d '{"group":"engineering","from_group":"discipline-knowledge","inferred_only":true}'
+```
+
+Drop `inferred_only` and `from_group` takes the whole page, deliberate filings
+included — so keep it unless you mean that.
+
+That clears what is already indexed. To stop the next un-inferable upload from
+landing there, move the fallback page itself in `{DATA_DIR}/library_groups.json`:
+
+```json
+{
+  "default": "engineering",
+  "categories": { "misc": "engineering", "course-material": "engineering" }
+}
+```
+
+`default` catches documents with no category at all; the `categories` entries
+catch `misc` (nothing could be inferred) and `course-material` (the filename
+looked like training material). With both set, a document reaches Discipline
+Knowledge only by being filed there on purpose. An unrecognized page name in this
+file is ignored rather than applied, so a typo cannot empty a page.
 
 ### Retuning which index a document lands in
 
