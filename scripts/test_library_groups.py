@@ -436,7 +436,7 @@ resp = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth)
 check("discipline page ok", resp.status_code == 200, resp.text)
 page = resp.json()
 check("discipline index is titled for the Pratt memorial library",
-      page["page_title"] == "William H. Pratt Memorial Engineering & Science Library", page.get("page_title"))
+      page["page_title"] == "William Held Pratt Memorial Engineering & Science Library", page.get("page_title"))
 check("its short tab label is unchanged", page["label"] == "Discipline Knowledge", page.get("label"))
 
 eng_title = client.get(f"/library/groups/{ENGINEERING}", headers=auth).json()
@@ -446,7 +446,7 @@ check("a page with no formal name falls back to its label",
 counts_resp = client.get("/library/groups", headers=auth).json()
 titles = {g["group"]: g["page_title"] for g in counts_resp["groups"]}
 check("the counts endpoint carries page titles too",
-      titles[DISCIPLINE_KNOWLEDGE] == "William H. Pratt Memorial Engineering & Science Library", str(titles))
+      titles[DISCIPLINE_KNOWLEDGE] == "William Held Pratt Memorial Engineering & Science Library", str(titles))
 sources = {d["source"] for d in page["documents"]}
 check("uploaded handbook on the page", "Concrete Handbook.txt" in sources, str(sorted(sources)))
 check("UFC extract on the page too", "UFC 4-010-01 Extract.txt" in sources, str(sorted(sources)))

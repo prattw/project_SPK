@@ -65,7 +65,7 @@ GROUP_LABELS: dict[str, str] = {
 # formal name. The labels above still name the navigation tabs, which have to
 # stay short. Only pages that differ from their label need an entry.
 GROUP_PAGE_TITLES: dict[str, str] = {
-    DISCIPLINE_KNOWLEDGE: "William H. Pratt Memorial Engineering & Science Library",
+    DISCIPLINE_KNOWLEDGE: "William Held Pratt Memorial Engineering & Science Library",
 }
 
 GROUP_DESCRIPTIONS: dict[str, str] = {

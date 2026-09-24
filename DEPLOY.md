@@ -239,7 +239,7 @@ The three subject indexes render live from the search index, so documents appear
 as soon as they are ingested — no `build_library_html.py` rebuild required.
 
 The first two indexes hold the publications people consult to do the work. The
-third, titled the William H. Pratt Memorial Engineering & Science Library, is a
+third, titled the William Held Pratt Memorial Engineering & Science Library, is a
 reading collection kept for study rather than daily reference, which is why it is
 curated by explicit assignment instead of by guessing at filenames.
 
