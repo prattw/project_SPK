@@ -793,11 +793,20 @@ function libraryDocLabel(doc) {
   return doc.doc_number || doc.display_title || doc.title || doc.source;
 }
 
+/** Case, punctuation and underscores are not a difference worth reprinting a title for. */
+function libraryTextKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function libraryDocSecondary(doc) {
   const label = libraryDocLabel(doc);
-  if (doc.title && doc.title !== label) return doc.title;
+  const key = libraryTextKey(label);
+  if (doc.title && libraryTextKey(doc.title) !== key) return doc.title;
   const stem = (doc.source || "").replace(/\.[^.]+$/, "");
-  if (stem && stem !== label) return stem.replace(/_/g, " ");
+  if (stem && libraryTextKey(stem) !== key) return stem.replace(/_/g, " ");
   return "";
 }
 
