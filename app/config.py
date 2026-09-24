@@ -30,21 +30,7 @@ class Settings(BaseSettings):
     # with the ACCESS_ROSTER env var. Empty string disables the roster gate.
     access_roster: str = (
         "william.a.pratt@usace.army.mil,"
-        "daniel.t.osborne@usace.army.mil,"
-        "cameron.l.sessions@usace.army.mil,"
-        "ike.m.ukachi@usace.army.mil,"
-        "nicholas.j.ivy@usace.army.mil,"
-        "jesse.j.schlunegger@usace.army.mil,"
-        "matthew.parks@usace.army.mil,"
-        "hans.w.fotta@usace.army.mil,"
-        "nicole.a.castle@usace.army.mil,"
-        "angela.c.delwiche@usace.army.mil,"
-        "suzanne.monk@usace.army.mil,"
-        "shakib.a.waheedi@usace.army.mil,"
-        "anita.y.sie@usace.army.mil,"
-        "robert.m.mctighe@usace.army.mil,"
-        "chi.m.bui@usace.army.mil,"
-        "richard.l.wells@usace.army.mil"
+        "suzanne.monk@usace.army.mil"
     )
     # Secret for signing login tokens. Set AUTH_SECRET in production so sessions
     # survive restarts; falls back to APP_API_KEY, then an ephemeral boot secret.

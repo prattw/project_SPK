@@ -63,6 +63,16 @@ Sign-in is restricted to the roster of approved `@usace.army.mil` emails
 with their email and get a signed session token that expires after 24 hours,
 after which they must sign in again.
 
+**If `ACCESS_ROSTER` is set in the Railway variables, it wins and the list in
+`app/config.py` is ignored.** Editing the file will appear to do nothing —
+including when removing someone's access. Check Railway first, and if the
+variable is set there, change it there or delete it to fall back to the file.
+
+Removing someone takes effect on the next deploy, not 24 hours later.
+Membership is re-checked on every request rather than only at sign-in, so a
+session token already in their browser stops working as soon as the new build
+is live.
+
 ### Usage analytics (retained + Friday report)
 
 The app logs **logins, queries, tokens, latency, uploads, and errors** to SQLite
