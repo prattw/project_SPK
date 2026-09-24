@@ -13,6 +13,14 @@ Army Regulations and DA Pamphlets span both engineering and legal/administrative
 subject matter, so they are routed by their series number (AR 420-1 is facilities
 engineering; AR 27-1 is legal services) instead of by category alone.
 
+Inference only works on documents whose filename follows a publication naming
+convention. A folder of discipline references — textbooks, handbooks, course
+decks, district guidance — has no such convention, so those documents can instead
+be *assigned* a group when they are uploaded. The assignment is stored on every
+chunk under :data:`GROUP_META_KEY` and is authoritative, which is what makes
+"everything in this folder belongs on this page" a deterministic statement rather
+than a guess about filenames.
+
 The default mapping can be overridden at runtime — without a redeploy — by
 placing a ``library_groups.json`` file in the data directory. See
 ``load_group_overrides`` for the accepted shape.
@@ -34,6 +42,9 @@ DISCIPLINE_KNOWLEDGE = "discipline-knowledge"
 DEFAULT_GROUP = DISCIPLINE_KNOWLEDGE
 
 OVERRIDE_FILENAME = "library_groups.json"
+
+# Chunk metadata key holding an explicit, upload-time group assignment.
+GROUP_META_KEY = "library_group"
 
 # Display metadata for the three index pages, in tab order.
 GROUP_ORDER: tuple[str, ...] = (ENGINEERING, CONTRACTING_LAW, DISCIPLINE_KNOWLEDGE)
@@ -183,15 +194,34 @@ def _ar_pam_group(doc_number: str | None) -> str:
     return CONTRACTING_LAW
 
 
+def valid_group(value: Any) -> str | None:
+    """Canonical group key for a stored or user-supplied value, else ``None``.
+
+    Chroma hands back whatever was written, so a stale or hand-edited metadata
+    value must never be trusted enough to route a document to a page that does
+    not exist.
+    """
+    if not isinstance(value, str):
+        return None
+    return normalize_group(value)
+
+
 def library_group(
     category: str | None,
     doc_number: str | None = None,
     source: str | None = None,
+    assigned: str | None = None,
 ) -> str:
     """Return the index page a document belongs to.
 
-    Precedence: exact source override, doc-number prefix override, category
-    override, AR/PAM series routing, built-in category map, then the default page.
+    Precedence, most specific first: an exact source override (the admin naming
+    one file), the group assigned to the document at upload time, a doc-number
+    prefix override, a category override, AR/PAM series routing, the built-in
+    category map, then the default page.
+
+    An assigned group outranks every form of inference because someone stated it
+    on purpose; it yields only to an exact-filename override, which is the
+    narrower statement of the two.
     """
     overrides = load_group_overrides()
 
@@ -199,6 +229,10 @@ def library_group(
         mapped = overrides["sources"].get(source)
         if mapped:
             return mapped
+
+    explicit = valid_group(assigned)
+    if explicit:
+        return explicit
 
     if doc_number:
         upper = doc_number.upper()
@@ -249,7 +283,7 @@ def group_summary(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         group: {"documents": 0, "chunks": 0} for group in GROUP_ORDER
     }
     for doc in documents:
-        group = doc.get("library_group") or library_group(
+        group = valid_group(doc.get("library_group")) or library_group(
             doc.get("category"), doc.get("doc_number"), doc.get("source")
         )
         bucket = counts.setdefault(group, {"documents": 0, "chunks": 0})

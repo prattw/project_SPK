@@ -13,6 +13,11 @@ Usage:
     --exclude "(CUI) Policy Alert Summary 14 FEB 2025.pdf" \
     --exclude "CUI Doc - PAM.pdf"
 
+  # File an entire folder on one Document Library index page, regardless of
+  # what the filenames look like:
+  python3 scripts/zip_upload_library.py "D:/Project SPK folder/Master Library" \
+    --group discipline-knowledge
+
   # Dry run (no upload, just show what would happen):
   python3 scripts/zip_upload_library.py "/path/to/folder" --dry-run
 """
@@ -44,6 +49,9 @@ INGESTABLE_EXTENSIONS = {
 DEFAULT_MAX_ZIP_MB = 60
 UPLOAD_TIMEOUT_SECONDS = 600
 UPLOAD_MAX_RETRIES = 3
+
+# Mirrors app/library_groups.py GROUP_ORDER.
+LIBRARY_GROUPS = ("engineering", "contracting-law", "discipline-knowledge")
 
 
 def discover_files(root: Path, excludes: set[str]) -> list[Path]:
@@ -84,7 +92,7 @@ def build_zip(files: list[Path]) -> bytes:
     return buf.getvalue()
 
 
-def upload_zip(base_url: str, token: str, data: bytes, label: str) -> dict:
+def upload_zip(base_url: str, token: str, data: bytes, label: str, group: str = "") -> dict:
     """Upload via curl (matches the rest of the admin tooling — avoids macOS
     Python SSL cert issues) using a temp file for the multipart body.
 
@@ -95,6 +103,11 @@ def upload_zip(base_url: str, token: str, data: bytes, label: str) -> dict:
     """
     import tempfile
     import time
+    from urllib.parse import quote
+
+    endpoint = f"{base_url.rstrip('/')}/admin/library/upload-zip"
+    if group:
+        endpoint += f"?group={quote(group)}"
 
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         tmp.write(data)
@@ -107,7 +120,7 @@ def upload_zip(base_url: str, token: str, data: bytes, label: str) -> dict:
                     "curl", "-sS", "--max-time", str(UPLOAD_TIMEOUT_SECONDS),
                     "-w", "\n__HTTP_STATUS__:%{http_code}",
                     "-X", "POST",
-                    f"{base_url.rstrip('/')}/admin/library/upload-zip",
+                    endpoint,
                     "-H", f"Authorization: Bearer {token}",
                     "-F", f"file=@{tmp_path};filename={label};type=application/zip",
                 ],
@@ -162,6 +175,11 @@ def main() -> int:
         help="Exact filename to exclude (repeatable)",
     )
     parser.add_argument("--max-zip-mb", type=int, default=DEFAULT_MAX_ZIP_MB)
+    parser.add_argument(
+        "--group", default="", choices=("", *LIBRARY_GROUPS),
+        help="File every document in this folder on one Document Library index page. "
+        "Without it, each document's page is inferred from its filename.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--skip-already-incoming", action="store_true",
@@ -192,6 +210,10 @@ def main() -> int:
     print(f"Found {len(files)} ingestible file(s), {total_bytes / (1024**3):.2f} GB total")
     print(f"Excluded {len(excludes)} file(s) by name: {sorted(excludes)}")
     print(f"Split into {len(batches)} zip batch(es) (max {args.max_zip_mb} MB each)")
+    if args.group:
+        print(f"Index page: every file will be filed under '{args.group}'")
+    else:
+        print("Index page: inferred per file from its name")
 
     if args.dry_run:
         for i, batch in enumerate(batches, 1):
@@ -207,13 +229,18 @@ def main() -> int:
         label = f"batch_{i:03d}.zip"
         print(f"Uploading batch {i}/{len(batches)} ({len(batch)} files) as {label} ...")
         data = build_zip(batch)
-        result = upload_zip(args.url, args.token, data, label)
+        result = upload_zip(args.url, args.token, data, label, args.group)
         print(f"  -> {result.get('message')}")
 
     print("\nAll batches uploaded. Check the queue:")
     print(f"  curl -s {args.url}/admin/library/incoming -H \"Authorization: Bearer $SPK_TOKEN\"")
     print("Then start ingest:")
     print(f"  curl -s -X POST {args.url}/admin/library/ingest -H \"Authorization: Bearer $SPK_TOKEN\"")
+    if args.group:
+        print(
+            "\nThe group travels with the queued files, so the ingest above files them\n"
+            f"under '{args.group}' without any extra flag."
+        )
     return 0
 
 

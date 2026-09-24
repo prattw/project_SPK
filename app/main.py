@@ -34,6 +34,7 @@ from app.library_groups import (
 from app.library_ingest import (
     extract_incoming_zip,
     library_incoming_path,
+    read_incoming_groups,
     save_incoming_upload,
 )
 from app.publication_sync import check_publication_sites
@@ -131,12 +132,38 @@ class LibraryIngestRequest(BaseModel):
         max_length=20,
         description='Remove existing indexed sources matching these substrings before ingest (e.g. ["UFC"]).',
     )
+    group: str | None = Field(
+        default=None,
+        description=(
+            "Index page for queued files that were uploaded without a group "
+            '(e.g. "discipline-knowledge"). Per-file assignments still win.'
+        ),
+    )
+
+
+class LibraryRegroupRequest(BaseModel):
+    group: str = Field(description='Index page to file these documents on (e.g. "discipline-knowledge").')
+    sources: list[str] | None = Field(
+        default=None,
+        max_length=5000,
+        description="Exact indexed filenames to move.",
+    )
+    patterns: list[str] | None = Field(
+        default=None,
+        max_length=50,
+        description="Substrings matched against indexed filenames, as an alternative to listing them.",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="Report what would move without writing anything.",
+    )
 
 
 class LibraryUploadResponse(BaseModel):
     filename: str
     message: str
     incoming_count: int
+    group: str | None = None
 
 
 class FilesResponse(BaseModel):
@@ -675,46 +702,85 @@ def usage_weekly_snapshots(request: Request) -> dict:
     return {"snapshots": list_weekly_snapshots()}
 
 
+def _require_group(value: str | None) -> str | None:
+    """Validate an optional index-page name from a request."""
+    if not value:
+        return None
+    canonical = normalize_group(value)
+    if not canonical:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Unknown library group: {value}",
+                "valid_groups": list(GROUP_ORDER),
+            },
+        )
+    return canonical
+
+
 @app.post("/admin/library/upload", response_model=LibraryUploadResponse)
-async def admin_library_upload(request: Request, file: UploadFile = File(...)) -> LibraryUploadResponse:
+async def admin_library_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    group: str | None = Query(
+        default=None,
+        description='Index page this document belongs on (e.g. "discipline-knowledge").',
+    ),
+) -> LibraryUploadResponse:
     """Upload one library document to the production incoming folder (admin only)."""
     require_api_key(request)
     _require_usage_admin(request)
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
 
+    page = _require_group(group)
+
     content = await file.read()
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb} MB limit.")
 
     try:
-        dest = await run_in_threadpool(save_incoming_upload, content, file.filename)
+        dest = await run_in_threadpool(save_incoming_upload, content, file.filename, page)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     incoming = library_incoming_path()
     count = len(list(incoming.glob("*")))
+    destination = f" for the {GROUP_LABELS[page]} index" if page else ""
     return LibraryUploadResponse(
         filename=dest.name,
-        message=f"Saved to library-incoming. Upload remaining files, then POST /admin/library/ingest.",
+        message=(
+            f"Saved to library-incoming{destination}. "
+            "Upload remaining files, then POST /admin/library/ingest."
+        ),
         incoming_count=count,
+        group=page,
     )
 
 
 @app.post("/admin/library/upload-zip", response_model=LibraryUploadResponse)
-async def admin_library_upload_zip(request: Request, file: UploadFile = File(...)) -> LibraryUploadResponse:
+async def admin_library_upload_zip(
+    request: Request,
+    file: UploadFile = File(...),
+    group: str | None = Query(
+        default=None,
+        description='Index page every document in this zip belongs on (e.g. "discipline-knowledge").',
+    ),
+) -> LibraryUploadResponse:
     """Extract supported files from a zip into library-incoming (admin only)."""
     require_api_key(request)
     _require_usage_admin(request)
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Upload a .zip file.")
 
+    page = _require_group(group)
+
     content = await file.read()
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb} MB limit.")
 
     try:
-        names = await run_in_threadpool(extract_incoming_zip, content)
+        names = await run_in_threadpool(extract_incoming_zip, content, page)
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="Invalid zip file.") from exc
     except Exception as exc:
@@ -725,10 +791,12 @@ async def admin_library_upload_zip(request: Request, file: UploadFile = File(...
 
     incoming = library_incoming_path()
     count = len(list(incoming.glob("*")))
+    destination = f" for the {GROUP_LABELS[page]} index" if page else ""
     return LibraryUploadResponse(
         filename=file.filename,
-        message=f"Extracted {len(names)} file(s) to library-incoming.",
+        message=f"Extracted {len(names)} file(s) to library-incoming{destination}.",
         incoming_count=count,
+        group=page,
     )
 
 
@@ -751,7 +819,8 @@ def admin_library_ingest(
         )
 
     patterns = body.purge_patterns if body else None
-    job = start_background_library_ingest(purge_patterns=patterns)
+    page = _require_group(body.group if body else None)
+    job = start_background_library_ingest(purge_patterns=patterns, group=page)
     return QueryJobResponse(
         job_id=job.id,
         status=job.status,
@@ -765,18 +834,71 @@ def admin_library_incoming(request: Request) -> dict:
     require_api_key(request)
     _require_usage_admin(request)
     incoming = library_incoming_path()
+    assigned = read_incoming_groups()
     files = sorted(
         (
             {
                 "filename": p.name,
                 "size_bytes": p.stat().st_size,
+                "group": assigned.get(p.name),
             }
             for p in incoming.iterdir()
             if p.is_file() and not p.name.startswith(".")
         ),
         key=lambda item: item["filename"].lower(),
     )
-    return {"incoming_count": len(files), "files": files}
+    by_group: dict[str, int] = {}
+    for item in files:
+        key = item["group"] or "unassigned"
+        by_group[key] = by_group.get(key, 0) + 1
+    return {"incoming_count": len(files), "files": files, "by_group": by_group}
+
+
+@app.post("/admin/library/regroup")
+def admin_library_regroup(request: Request, body: LibraryRegroupRequest) -> dict:
+    """Move already-indexed documents to an index page (admin only).
+
+    Correcting where a document files should not require re-embedding it, so this
+    rewrites chunk metadata in place. Accepts exact filenames or substring
+    patterns, and ``dry_run`` to see the effect first.
+    """
+    require_api_key(request)
+    _require_usage_admin(request)
+
+    page = _require_group(body.group)
+    rag = get_rag()
+
+    targets = list(body.sources or [])
+    if body.patterns:
+        targets.extend(rag.sources_matching(body.patterns))
+    targets = sorted(set(targets))
+
+    if not targets:
+        raise HTTPException(
+            status_code=400,
+            detail="Nothing to move. Provide sources or patterns that match indexed documents.",
+        )
+
+    if body.dry_run:
+        indexed = set(rag.list_sources())
+        would_move = sorted(t for t in targets if t in indexed)
+        return {
+            "group": page,
+            "dry_run": True,
+            "would_move": would_move,
+            "not_found": sorted(set(targets) - indexed),
+            "count": len(would_move),
+        }
+
+    try:
+        result = rag.assign_library_group(targets, page)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    result["dry_run"] = False
+    result["count"] = len(result["updated"])
+    result["label"] = GROUP_LABELS[page]
+    return result
 
 
 @app.post("/ingest", response_model=IngestResponse)
