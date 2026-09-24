@@ -268,6 +268,47 @@ curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/library/groups/engineering"
 curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/files?group=contracting-law&origin=library"
 ```
 
+### Uploading only the documents that are new
+
+A working folder grows by accretion: a few new documents dropped in beside
+hundreds that were uploaded months ago. `--skip-already-indexed` asks the server
+what it already has and sends only the remainder, so you can point the script at
+the whole folder without thinking about which files are new:
+
+```bash
+export SPK_URL="https://YOUR-APP.up.railway.app"
+export SPK_TOKEN="paste-token-here"
+
+python3 scripts/zip_upload_library.py "$HOME/Documents/Master Library" \
+  --skip-already-indexed --ingest
+```
+
+```
+Found 1,847 ingestible file(s) in /Users/you/Documents/Master Library
+Skipped 1,806 already on the server; 41 new.
+Uploading 41 file(s), 0.38 GB total
+```
+
+Add `--dry-run` to see the 41 named before anything is sent.
+
+This is an efficiency measure, not a correctness one — the server already
+discards an incoming file when a document of that name is in the index, so a run
+without the flag reaches the same end state. What it saves is sending gigabytes
+that will be thrown away on arrival, which on a home connection is the difference
+between minutes and hours.
+
+Documents are compared by filename, because that is the identity the ingest
+itself uses. Two consequences worth knowing:
+
+- Re-uploading a **corrected version under the same filename** will not replace
+  the indexed copy, with or without this flag. Give the new version a different
+  name, or clear the old one first by passing `purge_patterns` to
+  `POST /admin/library/ingest`.
+- A PDF too large to index whole was **split into `__p00001-00500` parts** and
+  the original deleted, so its own name is not in the index. The script
+  reconstructs it from the part names, which is why the biggest documents in the
+  corpus are not re-sent and re-split on every run.
+
 ### Filing a whole folder on one index page
 
 Routing by filename only works for documents that follow a publication naming
