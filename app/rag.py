@@ -14,7 +14,7 @@ from app.citations import citations_from_chunks, filter_citations_to_answer
 from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
 from app.doc_metadata import classify_upload_origin, enrich_library_fields, infer_doc_metadata
-from app.library_groups import library_group
+from app.library_groups import GROUP_META_KEY, library_group, valid_group
 from app.usace_dates import normalize_doc_number
 from app.embeddings import embed_query, embed_texts
 from app.llm import generate_answer, generate_general_answer
@@ -133,6 +133,7 @@ class RAGService:
                         "display_title": meta.get("display_title"),
                         "year_published": meta.get("year_published"),
                         "year_updated": meta.get("year_updated"),
+                        "assigned_group": meta.get(GROUP_META_KEY),
                     }
                 entry = by_source[source]
                 entry["chunks"] += 1
@@ -150,6 +151,10 @@ class RAGService:
                 ):
                     if not entry.get(key) and meta.get(key):
                         entry[key] = meta[key]
+                # Stored under a different key than the resolved value below, so
+                # a partially re-indexed source still surfaces its assignment.
+                if not entry.get("assigned_group") and meta.get(GROUP_META_KEY):
+                    entry["assigned_group"] = meta[GROUP_META_KEY]
                 indexed_at = meta.get("indexed_at")
                 if indexed_at and (
                     not entry.get("indexed_at") or indexed_at > entry["indexed_at"]
@@ -170,7 +175,10 @@ class RAGService:
                     if not entry.get(key) and inferred.get(key):
                         entry[key] = inferred[key]
             entry["library_group"] = library_group(
-                entry.get("category"), entry.get("doc_number"), source
+                entry.get("category"),
+                entry.get("doc_number"),
+                source,
+                assigned=entry.get("assigned_group"),
             )
             entry["url"] = None  # filled by API layer via citations helper
             docs.append(entry)
@@ -1234,6 +1242,52 @@ class RAGService:
                 if self.update_source_metadata(source, {"upload_origin": correct}):
                     changed += 1
         return changed
+
+    def assign_library_group(self, sources: list[str], group: str) -> dict[str, Any]:
+        """Pin already-indexed sources to an index page, no re-ingest required.
+
+        Re-embedding 1,800 documents to correct a filing mistake is not a
+        reasonable ask, so the assignment is a metadata write.
+        """
+        canonical = valid_group(group)
+        if not canonical:
+            raise ValueError(f"Unknown library group: {group}")
+
+        indexed = set(self.list_sources())
+        updated: list[str] = []
+        missing: list[str] = []
+        chunks = 0
+        for source in sources:
+            if source not in indexed:
+                missing.append(source)
+                continue
+            touched = self.update_source_metadata(source, {GROUP_META_KEY: canonical})
+            if touched:
+                updated.append(source)
+                chunks += touched
+            else:
+                missing.append(source)
+
+        if updated:
+            self._invalidate_caches()
+
+        return {
+            "group": canonical,
+            "updated": sorted(updated),
+            "not_found": sorted(missing),
+            "chunks_updated": chunks,
+        }
+
+    def sources_matching(self, patterns: list[str]) -> list[str]:
+        """Indexed sources whose filename contains any pattern (case-insensitive)."""
+        lowered = [p.lower() for p in patterns if p and p.strip()]
+        if not lowered:
+            return []
+        return [
+            source
+            for source in self.list_sources()
+            if any(pattern in source.lower() for pattern in lowered)
+        ]
 
     def reset_index(self) -> None:
         self._chroma.delete_collection(settings.collection_name)

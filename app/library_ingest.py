@@ -1,8 +1,15 @@
-"""Production library corpus ingest — split, stage, and index document batches."""
+"""Production library corpus ingest — split, stage, and index document batches.
+
+An upload may declare which Document Library index page its files belong on. The
+incoming folder is flat and an ingest can span several upload sessions (or resume
+after a crash), so the declaration is recorded in a manifest beside the files
+rather than held in memory. See :func:`record_incoming_group`.
+"""
 
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import sys
 import zipfile
@@ -14,6 +21,7 @@ from pypdf import PdfReader, PdfWriter
 
 from app.config import settings
 from app.ingest import INGESTABLE_EXTENSIONS, discover_documents, ingest_path
+from app.library_groups import GROUP_META_KEY, valid_group
 from app.rag import get_rag
 
 # Some PDFs (e.g. FAR.pdf) have deeply nested object trees that overflow the
@@ -23,6 +31,13 @@ sys.setrecursionlimit(max(sys.getrecursionlimit(), 50_000))
 LIBRARY_INCOMING_DIR = "library-incoming"
 DEFAULT_PART_PAGES = 500
 DEFAULT_SPLIT_THRESHOLD = 1200
+
+# Dot-prefixed so the incoming listing and the ingest sweep both skip it, and
+# .json is not an ingestable extension either way.
+GROUP_MANIFEST_NAME = ".groups.json"
+
+# split_oversized_pdfs names parts "<stem>__p00001-00500.pdf".
+PART_SUFFIX_MARKER = "__p"
 
 ProgressCallback = Callable[[str, int, int, str], None]
 # args: phase ("split"|"ingest"), done, total, detail
@@ -40,6 +55,7 @@ class LibraryIngestReport:
     indexed_files: list[str] = field(default_factory=list)
     failed_files: list[dict[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    grouped_files: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +69,7 @@ class LibraryIngestReport:
             "indexed_files": self.indexed_files,
             "failed_files": self.failed_files,
             "warnings": self.warnings,
+            "grouped_files": self.grouped_files,
         }
 
 
@@ -60,6 +77,82 @@ def library_incoming_path() -> Path:
     path = settings.data_path / LIBRARY_INCOMING_DIR
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def group_manifest_path() -> Path:
+    return library_incoming_path() / GROUP_MANIFEST_NAME
+
+
+def read_incoming_groups() -> dict[str, str]:
+    """Filename -> assigned index page for files waiting in library-incoming."""
+    path = group_manifest_path()
+    try:
+        if not path.is_file():
+            return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — a bad manifest must not block ingest
+        print(f"Library group manifest ignored ({path}): {exc}")
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+    groups: dict[str, str] = {}
+    for name, group in raw.items():
+        canonical = valid_group(group)
+        if canonical:
+            groups[str(name)] = canonical
+    return groups
+
+
+def _write_incoming_groups(groups: dict[str, str]) -> None:
+    path = group_manifest_path()
+    if not groups:
+        path.unlink(missing_ok=True)
+        return
+    path.write_text(json.dumps(groups, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def record_incoming_group(filename: str, group: str | None) -> str | None:
+    """Remember that ``filename`` should land on a specific index page."""
+    canonical = valid_group(group)
+    if not canonical:
+        return None
+    groups = read_incoming_groups()
+    groups[Path(filename).name] = canonical
+    _write_incoming_groups(groups)
+    return canonical
+
+
+def forget_incoming_groups(filenames: list[str]) -> None:
+    """Drop manifest entries for files that are no longer waiting to be indexed."""
+    groups = read_incoming_groups()
+    remaining = {name: group for name, group in groups.items() if name not in set(filenames)}
+    if remaining != groups:
+        _write_incoming_groups(remaining)
+
+
+def _part_parent_name(filename: str) -> str | None:
+    """Original filename a split part came from, if this looks like a part."""
+    stem = Path(filename).stem
+    marker = stem.rfind(PART_SUFFIX_MARKER)
+    if marker <= 0:
+        return None
+    return f"{stem[:marker]}{Path(filename).suffix}"
+
+
+def resolve_group(filename: str, groups: dict[str, str], default: str | None) -> str | None:
+    """Assigned page for a staged file, falling back to the batch default.
+
+    An oversized PDF is indexed as page-range parts whose names the uploader never
+    saw, so a part inherits whatever the whole document was assigned.
+    """
+    name = Path(filename).name
+    if name in groups:
+        return groups[name]
+    parent = _part_parent_name(name)
+    if parent and parent in groups:
+        return groups[parent]
+    return valid_group(default)
 
 
 def _skip_parent_parts(root: Path, path: Path) -> bool:
@@ -204,14 +297,20 @@ def run_library_ingest(
     part_pages: int = DEFAULT_PART_PAGES,
     split_threshold: int = DEFAULT_SPLIT_THRESHOLD,
     purge_patterns: list[str] | None = None,
+    group: str | None = None,
     progress: ProgressCallback | None = None,
 ) -> LibraryIngestReport:
-    """Split oversized PDFs, stage files to data/, and index the corpus."""
+    """Split oversized PDFs, stage files to data/, and index the corpus.
+
+    ``group`` assigns an index page to files the manifest says nothing about, so a
+    one-off ingest can be filed without recording a manifest entry per file.
+    """
     root = corpus_root or library_incoming_path()
     if not root.exists():
         raise FileNotFoundError(f"Corpus folder not found: {root}")
 
     report = LibraryIngestReport()
+    assigned_groups = read_incoming_groups()
 
     if purge_patterns:
         report.purged_sources = purge_sources_matching(purge_patterns)
@@ -259,12 +358,17 @@ def run_library_ingest(
             if progress:
                 progress("ingest", i - 1, total, f"{name}: page {done:,}/{pages_total:,}")
 
+        extra_meta = {"upload_origin": "library"}
+        page = resolve_group(name, assigned_groups, group)
+        if page:
+            extra_meta[GROUP_META_KEY] = page
+
         try:
             result = ingest_path(
                 path,
                 source_name=name,
                 progress_callback=on_pages,
-                extra_meta={"upload_origin": "library"},
+                extra_meta=extra_meta,
             )
             chunks = int(result.get("chunks_indexed", 0))
             report.warnings.extend(list(result.get("warnings", [])))
@@ -272,6 +376,8 @@ def run_library_ingest(
                 report.files_indexed += 1
                 report.chunks_indexed += chunks
                 report.indexed_files.append(name)
+                if page:
+                    report.grouped_files[page] = report.grouped_files.get(page, 0) + 1
             else:
                 report.files_skipped += 1
                 report.warnings.append(f"{name}: {result.get('message', 'no text indexed')}")
@@ -282,10 +388,18 @@ def run_library_ingest(
         if progress:
             progress("ingest", i, total, f"Done {name}")
 
+    # Files are moved out of library-incoming as they are staged, so their
+    # manifest entries are now stale; leaving them would misfile a later upload
+    # that happens to reuse a filename. A split PDF is gone too, even though
+    # only its parts appear in `paths`, so clear the parent entry as well.
+    done = [Path(p).name for p in paths]
+    done += [parent for name in done if (parent := _part_parent_name(name))]
+    forget_incoming_groups(done)
+
     return report
 
 
-def save_incoming_upload(content: bytes, filename: str) -> Path:
+def save_incoming_upload(content: bytes, filename: str, group: str | None = None) -> Path:
     """Save an uploaded file under library-incoming/, preserving subpaths in the name."""
     incoming = library_incoming_path()
     safe = Path(filename).name
@@ -303,10 +417,11 @@ def save_incoming_upload(content: bytes, filename: str) -> Path:
             dest = incoming / f"{stem} ({n}){ext}"
             n += 1
     dest.write_bytes(content)
+    record_incoming_group(dest.name, group)
     return dest
 
 
-def extract_incoming_zip(content: bytes) -> list[str]:
+def extract_incoming_zip(content: bytes, group: str | None = None) -> list[str]:
     """Extract a zip archive into library-incoming/. Returns extracted filenames."""
     incoming = library_incoming_path()
     extracted: list[str] = []
@@ -330,4 +445,11 @@ def extract_incoming_zip(content: bytes) -> list[str]:
                     n += 1
             dest.write_bytes(zf.read(info))
             extracted.append(dest.name)
+
+    canonical = valid_group(group)
+    if canonical and extracted:
+        groups = read_incoming_groups()
+        groups.update({name: canonical for name in extracted})
+        _write_incoming_groups(groups)
+
     return extracted

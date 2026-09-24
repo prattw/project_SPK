@@ -1,17 +1,37 @@
-"""Group the Document Library into the three index pages users browse.
+"""Group the Document Library into the index pages users browse.
 
 Every indexed document already carries a fine-grained ``category`` from
 :mod:`app.doc_metadata` (``engineer-regulation``, ``acquisition-regulation``,
 ``army-regulation``, ...). This module rolls those ~24 categories up into the
-three top-level indexes:
+top-level indexes:
 
 * ``engineering``           — Government Engineering documents
 * ``contracting-law``       — Government Contracting & Law documents
 * ``discipline-knowledge``  — Discipline Knowledge documents
+* ``miscellaneous``         — Miscellaneous Documents
+
+The first two hold the publications people consult to do the work. The third is a
+reading collection: textbooks and professional references kept for study rather
+than for daily reference, and it is reached by assignment alone — no filename
+pattern routes a document there, because no filename can say that a document was
+chosen for the collection.
+
+That leaves documents nothing could be inferred about, which is what the fourth
+page is for. Each of the other three is defined by what it holds, so none of them
+can absorb the unclassifiable without becoming a poorer description of itself; a
+page of its own keeps them browsable and searchable while saying plainly that
+nobody has filed them.
 
 Army Regulations and DA Pamphlets span both engineering and legal/administrative
 subject matter, so they are routed by their series number (AR 420-1 is facilities
 engineering; AR 27-1 is legal services) instead of by category alone.
+
+Inference only works on documents whose filename follows a publication naming
+convention. A textbook has no such convention, so those documents are instead
+*assigned* a group when they are uploaded. The assignment is stored on every
+chunk under :data:`GROUP_META_KEY` and is authoritative, which is what makes
+"everything in this folder belongs on this page" a deterministic statement rather
+than a guess about filenames.
 
 The default mapping can be overridden at runtime — without a redeploy — by
 placing a ``library_groups.json`` file in the data directory. See
@@ -30,18 +50,38 @@ from app.config import settings
 ENGINEERING = "engineering"
 CONTRACTING_LAW = "contracting-law"
 DISCIPLINE_KNOWLEDGE = "discipline-knowledge"
+MISCELLANEOUS = "miscellaneous"
 
-DEFAULT_GROUP = DISCIPLINE_KNOWLEDGE
+# Documents nothing could be inferred about land on their own page. The other
+# three are each defined by what they hold, so none of them can absorb a document
+# that matched no rule without becoming a poorer description of itself.
+DEFAULT_GROUP = MISCELLANEOUS
 
 OVERRIDE_FILENAME = "library_groups.json"
 
-# Display metadata for the three index pages, in tab order.
-GROUP_ORDER: tuple[str, ...] = (ENGINEERING, CONTRACTING_LAW, DISCIPLINE_KNOWLEDGE)
+# Chunk metadata key holding an explicit, upload-time group assignment.
+GROUP_META_KEY = "library_group"
+
+# Display metadata for the index pages, in tab order.
+GROUP_ORDER: tuple[str, ...] = (
+    ENGINEERING,
+    CONTRACTING_LAW,
+    DISCIPLINE_KNOWLEDGE,
+    MISCELLANEOUS,
+)
 
 GROUP_LABELS: dict[str, str] = {
     ENGINEERING: "Government Engineering",
     CONTRACTING_LAW: "Government Contracting & Law",
     DISCIPLINE_KNOWLEDGE: "Discipline Knowledge",
+    MISCELLANEOUS: "Miscellaneous Documents",
+}
+
+# Heading shown at the top of an index page, where there is room for a full
+# formal name. The labels above still name the navigation tabs, which have to
+# stay short. Only pages that differ from their label need an entry.
+GROUP_PAGE_TITLES: dict[str, str] = {
+    DISCIPLINE_KNOWLEDGE: "William Held Pratt Memorial Engineering & Science Library",
 }
 
 GROUP_DESCRIPTIONS: dict[str, str] = {
@@ -54,8 +94,13 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
         "and Army regulations governing legal, contracting, and information management."
     ),
     DISCIPLINE_KNOWLEDGE: (
-        "Training material, course slides, discipline references, and supporting documents "
-        "that are not numbered USACE publications or acquisition regulations."
+        "Textbooks and professional references gathered for study and background reading, "
+        "rather than the publications consulted for daily work."
+    ),
+    MISCELLANEOUS: (
+        "Indexed and searchable, but not part of a subject collection — documents whose "
+        "filename matched none of the publication conventions and that have not been filed "
+        "on a page by hand."
     ),
 }
 
@@ -83,9 +128,12 @@ CATEGORY_GROUPS: dict[str, str] = {
     "us-code": CONTRACTING_LAW,
     "udg-uai": CONTRACTING_LAW,
     "idac": CONTRACTING_LAW,
-    # --- Discipline Knowledge ---
-    "course-material": DISCIPLINE_KNOWLEDGE,
-    "misc": DISCIPLINE_KNOWLEDGE,
+    # --- Miscellaneous ---
+    # Neither of these is a statement that a document belongs in a reading
+    # collection: "course-material" is a guess from the filename and "misc" is the
+    # absence of one. Discipline Knowledge is reached by assignment alone.
+    "course-material": MISCELLANEOUS,
+    "misc": MISCELLANEOUS,
 }
 
 # AR / DA PAM series that are engineering subject matter. Everything else in the
@@ -134,10 +182,15 @@ def load_group_overrides(*, refresh: bool = False) -> dict[str, Any]:
     Accepted shape (every key optional)::
 
         {
+          "default": "engineering",
           "categories": {"course-material": "engineering"},
           "doc_number_prefixes": {"AR 420": "engineering"},
           "sources": {"Some Exact Filename.pdf": "discipline-knowledge"}
         }
+
+    ``default`` moves the fallback page, which is what keeps a curated index from
+    collecting every document nothing could be inferred about. The rest map a
+    category, a doc-number prefix, or one exact filename to a page.
 
     Unknown group names are ignored so a typo cannot blank out a page.
     """
@@ -145,12 +198,18 @@ def load_group_overrides(*, refresh: bool = False) -> dict[str, Any]:
     if _overrides_cache is not None and not refresh:
         return _overrides_cache
 
-    overrides: dict[str, Any] = {"categories": {}, "doc_number_prefixes": {}, "sources": {}}
+    overrides: dict[str, Any] = {
+        "default": None,
+        "categories": {},
+        "doc_number_prefixes": {},
+        "sources": {},
+    }
     path = group_override_path()
     try:
         if path.is_file():
             raw = json.loads(path.read_text(encoding="utf-8"))
-            for key in overrides:
+            overrides["default"] = valid_group(raw.get("default"))
+            for key in ("categories", "doc_number_prefixes", "sources"):
                 section = raw.get(key)
                 if not isinstance(section, dict):
                     continue
@@ -183,15 +242,34 @@ def _ar_pam_group(doc_number: str | None) -> str:
     return CONTRACTING_LAW
 
 
+def valid_group(value: Any) -> str | None:
+    """Canonical group key for a stored or user-supplied value, else ``None``.
+
+    Chroma hands back whatever was written, so a stale or hand-edited metadata
+    value must never be trusted enough to route a document to a page that does
+    not exist.
+    """
+    if not isinstance(value, str):
+        return None
+    return normalize_group(value)
+
+
 def library_group(
     category: str | None,
     doc_number: str | None = None,
     source: str | None = None,
+    assigned: str | None = None,
 ) -> str:
     """Return the index page a document belongs to.
 
-    Precedence: exact source override, doc-number prefix override, category
-    override, AR/PAM series routing, built-in category map, then the default page.
+    Precedence, most specific first: an exact source override (the admin naming
+    one file), the group assigned to the document at upload time, a doc-number
+    prefix override, a category override, AR/PAM series routing, the built-in
+    category map, then the default page.
+
+    An assigned group outranks every form of inference because someone stated it
+    on purpose; it yields only to an exact-filename override, which is the
+    narrower statement of the two.
     """
     overrides = load_group_overrides()
 
@@ -199,6 +277,10 @@ def library_group(
         mapped = overrides["sources"].get(source)
         if mapped:
             return mapped
+
+    explicit = valid_group(assigned)
+    if explicit:
+        return explicit
 
     if doc_number:
         upper = doc_number.upper()
@@ -216,11 +298,17 @@ def library_group(
     if normalized in AR_PAM_CATEGORIES:
         return _ar_pam_group(doc_number)
 
-    return CATEGORY_GROUPS.get(normalized, DEFAULT_GROUP)
+    fallback = overrides["default"] or DEFAULT_GROUP
+    return CATEGORY_GROUPS.get(normalized, fallback)
 
 
 def group_label(group: str) -> str:
     return GROUP_LABELS.get(group, GROUP_LABELS[DEFAULT_GROUP])
+
+
+def group_page_title(group: str) -> str:
+    """Full heading for an index page, falling back to its tab label."""
+    return GROUP_PAGE_TITLES.get(group) or group_label(group)
 
 
 def normalize_group(value: str | None) -> str | None:
@@ -239,6 +327,10 @@ def normalize_group(value: str | None) -> str | None:
         "law": CONTRACTING_LAW,
         "discipline": DISCIPLINE_KNOWLEDGE,
         "knowledge": DISCIPLINE_KNOWLEDGE,
+        "misc": MISCELLANEOUS,
+        "miscellaneous-documents": MISCELLANEOUS,
+        "other": MISCELLANEOUS,
+        "unfiled": MISCELLANEOUS,
     }
     return aliases.get(candidate)
 
@@ -249,7 +341,7 @@ def group_summary(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         group: {"documents": 0, "chunks": 0} for group in GROUP_ORDER
     }
     for doc in documents:
-        group = doc.get("library_group") or library_group(
+        group = valid_group(doc.get("library_group")) or library_group(
             doc.get("category"), doc.get("doc_number"), doc.get("source")
         )
         bucket = counts.setdefault(group, {"documents": 0, "chunks": 0})
@@ -260,6 +352,7 @@ def group_summary(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {
             "group": group,
             "label": GROUP_LABELS[group],
+            "page_title": group_page_title(group),
             "description": GROUP_DESCRIPTIONS[group],
             "documents": counts.get(group, {}).get("documents", 0),
             "chunks": counts.get(group, {}).get("chunks", 0),

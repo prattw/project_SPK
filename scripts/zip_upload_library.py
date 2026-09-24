@@ -13,6 +13,15 @@ Usage:
     --exclude "(CUI) Policy Alert Summary 14 FEB 2025.pdf" \
     --exclude "CUI Doc - PAM.pdf"
 
+  # File an entire folder on one Document Library index page, regardless of
+  # what the filenames look like:
+  python3 scripts/zip_upload_library.py "~/Documents/Project SPK folder/Master Library" \
+    --group discipline-knowledge
+
+  # On Windows use `python`, set the vars with `$env:SPK_URL = "..."`, and quote
+  # the folder (these paths contain spaces and parentheses):
+  #   python scripts\\zip_upload_library.py "C:\\Users\\YOU\\Documents\\Project SPK folder\\Master Library" --group discipline-knowledge
+
   # Dry run (no upload, just show what would happen):
   python3 scripts/zip_upload_library.py "/path/to/folder" --dry-run
 """
@@ -25,6 +34,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import warnings
 import zipfile
 from pathlib import Path
@@ -44,6 +54,9 @@ INGESTABLE_EXTENSIONS = {
 DEFAULT_MAX_ZIP_MB = 60
 UPLOAD_TIMEOUT_SECONDS = 600
 UPLOAD_MAX_RETRIES = 3
+
+# Mirrors app/library_groups.py GROUP_ORDER.
+LIBRARY_GROUPS = ("engineering", "contracting-law", "discipline-knowledge", "miscellaneous")
 
 
 def discover_files(root: Path, excludes: set[str]) -> list[Path]:
@@ -84,7 +97,7 @@ def build_zip(files: list[Path]) -> bytes:
     return buf.getvalue()
 
 
-def upload_zip(base_url: str, token: str, data: bytes, label: str) -> dict:
+def upload_zip(base_url: str, token: str, data: bytes, label: str, group: str = "") -> dict:
     """Upload via curl (matches the rest of the admin tooling — avoids macOS
     Python SSL cert issues) using a temp file for the multipart body.
 
@@ -95,6 +108,11 @@ def upload_zip(base_url: str, token: str, data: bytes, label: str) -> dict:
     """
     import tempfile
     import time
+    from urllib.parse import quote
+
+    endpoint = f"{base_url.rstrip('/')}/admin/library/upload-zip"
+    if group:
+        endpoint += f"?group={quote(group)}"
 
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         tmp.write(data)
@@ -107,7 +125,7 @@ def upload_zip(base_url: str, token: str, data: bytes, label: str) -> dict:
                     "curl", "-sS", "--max-time", str(UPLOAD_TIMEOUT_SECONDS),
                     "-w", "\n__HTTP_STATUS__:%{http_code}",
                     "-X", "POST",
-                    f"{base_url.rstrip('/')}/admin/library/upload-zip",
+                    endpoint,
                     "-H", f"Authorization: Bearer {token}",
                     "-F", f"file=@{tmp_path};filename={label};type=application/zip",
                 ],
@@ -130,6 +148,61 @@ def upload_zip(base_url: str, token: str, data: bytes, label: str) -> dict:
         raise last_error or RuntimeError("upload failed after retries")
     finally:
         os.unlink(tmp_path)
+
+
+def api_json(base_url: str, token: str, path: str, method: str = "GET", body: dict | None = None) -> dict:
+    """One JSON call via curl, matching the upload path above."""
+    cmd = [
+        "curl", "-sS", "--max-time", "120",
+        "-X", method,
+        f"{base_url.rstrip('/')}{path}",
+        "-H", f"Authorization: Bearer {token}",
+    ]
+    if body is not None:
+        cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr or "request failed")
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"unexpected response: {proc.stdout[:400]}") from exc
+
+
+def run_ingest(base_url: str, token: str) -> int:
+    """Start the ingest and follow it to the end.
+
+    Indexing a large folder runs for a long time, so the progress line matters more
+    than the return value — an ingest left unwatched looks identical to one that
+    died.
+    """
+    started = api_json(base_url, token, "/admin/library/ingest", method="POST")
+    job_id = started.get("job_id")
+    print(f"\n{started.get('message', 'Ingest started.')}")
+    if not job_id:
+        return 1
+
+    last = ""
+    while True:
+        time.sleep(5)
+        try:
+            job = api_json(base_url, token, f"/jobs/{job_id}")
+        except RuntimeError as exc:
+            print(f"  (could not read progress: {exc}; retrying)")
+            continue
+
+        done, total = job.get("files_done") or 0, job.get("files_total") or 0
+        line = f"  {job.get('phase') or job.get('status')}: {done}/{total} — {job.get('filename') or ''}".rstrip()
+        if line != last:
+            print(line)
+            last = line
+
+        if job.get("status") not in {"running", "queued", "pending"}:
+            print(f"\n{job.get('message', '')}")
+            report = job.get("library_report") or {}
+            for failure in report.get("failed_files") or []:
+                print(f"  FAILED {failure.get('filename')}: {failure.get('error')}")
+            return 0 if job.get("status") == "done" else 1
 
 
 def fetch_incoming_names(base_url: str, token: str) -> set[str]:
@@ -162,6 +235,16 @@ def main() -> int:
         help="Exact filename to exclude (repeatable)",
     )
     parser.add_argument("--max-zip-mb", type=int, default=DEFAULT_MAX_ZIP_MB)
+    parser.add_argument(
+        "--group", default="", choices=("", *LIBRARY_GROUPS),
+        help="File every document in this folder on one Document Library index page. "
+        "Without it, each document's page is inferred from its filename.",
+    )
+    parser.add_argument(
+        "--ingest", action="store_true",
+        help="Index the uploaded files once every batch is in, and follow the job "
+        "to the end instead of leaving you to poll it",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--skip-already-incoming", action="store_true",
@@ -170,7 +253,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    root = Path(args.root)
+    root = Path(args.root).expanduser()
     if not root.is_dir():
         print(f"Not a directory: {root}", file=sys.stderr)
         return 1
@@ -192,6 +275,10 @@ def main() -> int:
     print(f"Found {len(files)} ingestible file(s), {total_bytes / (1024**3):.2f} GB total")
     print(f"Excluded {len(excludes)} file(s) by name: {sorted(excludes)}")
     print(f"Split into {len(batches)} zip batch(es) (max {args.max_zip_mb} MB each)")
+    if args.group:
+        print(f"Index page: every file will be filed under '{args.group}'")
+    else:
+        print("Index page: inferred per file from its name")
 
     if args.dry_run:
         for i, batch in enumerate(batches, 1):
@@ -207,12 +294,22 @@ def main() -> int:
         label = f"batch_{i:03d}.zip"
         print(f"Uploading batch {i}/{len(batches)} ({len(batch)} files) as {label} ...")
         data = build_zip(batch)
-        result = upload_zip(args.url, args.token, data, label)
+        result = upload_zip(args.url, args.token, data, label, args.group)
         print(f"  -> {result.get('message')}")
 
-    print("\nAll batches uploaded. Check the queue:")
+    print("\nAll batches uploaded.")
+    if args.group:
+        print(
+            "The group travels with the queued files, so the ingest files them under\n"
+            f"'{args.group}' without any extra flag."
+        )
+
+    if args.ingest:
+        return run_ingest(args.url, args.token)
+
+    print("\nCheck the queue:")
     print(f"  curl -s {args.url}/admin/library/incoming -H \"Authorization: Bearer $SPK_TOKEN\"")
-    print("Then start ingest:")
+    print("Then start ingest (or re-run this with --ingest):")
     print(f"  curl -s -X POST {args.url}/admin/library/ingest -H \"Authorization: Bearer $SPK_TOKEN\"")
     return 0
 
