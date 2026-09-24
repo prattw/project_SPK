@@ -223,6 +223,55 @@ When `status` is `done`, the documents are **live for all users**.
 curl -s "$SPK_URL/admin/library/incoming" -H "Authorization: Bearer $SPK_TOKEN"
 ```
 
+## Document Library index pages
+
+The Document Library tab is split into four indexes. Each is deep-linkable, so
+you can bookmark or share a single index:
+
+| Index | URL | Contents |
+| --- | --- | --- |
+| All Documents | `/#library` | Every indexed library document (build-time list) |
+| Government Engineering | `/#library/engineering` | ER, EM, EP, EC, ETL, ECB, UFC, TSPWG, Tri-Service, TM, MIL-STD, space planning, OM, PN, HQ policy memos, and engineering-series AR/PAM |
+| Government Contracting & Law | `/#library/contracting-law` | FAR, DFARS, AFARS, PGI, United States Code, UAI/UDG, IDaC, and legal/contracting/administrative AR/PAM |
+| Discipline Knowledge | `/#library/discipline-knowledge` | Course material, training slides, and discipline references that are not numbered publications |
+
+The three subject indexes render live from the search index, so documents appear
+as soon as they are ingested — no `build_library_html.py` rebuild required.
+
+### API
+
+```bash
+# Document counts per index
+curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/library/groups"
+
+# One index, with download URLs
+curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/library/groups/engineering"
+
+# /files also accepts group + origin filters
+curl -H "Authorization: Bearer $SPK_TOKEN" "$SPK_URL/files?group=contracting-law&origin=library"
+```
+
+### Retuning which index a document lands in
+
+Documents are routed by the `category` inferred from their filename, and AR/PAM
+are routed by series number (AR 420-1 is facilities engineering; AR 27-1 is legal
+services). To change the routing without a redeploy, drop a `library_groups.json`
+file in the data volume (`/data/files/library_groups.json`):
+
+```json
+{
+  "categories":          { "course-material": "engineering" },
+  "doc_number_prefixes": { "AR 385": "discipline-knowledge" },
+  "sources":             { "004 FY26 Student Slides.pdf": "engineering" }
+}
+```
+
+Precedence is exact `sources` match, then longest `doc_number_prefixes` match,
+then `categories`. Valid group names are `engineering`, `contracting-law`, and
+`discipline-knowledge`; unknown names and malformed JSON are ignored so a bad
+edit cannot blank out an index. The file is read once per process, so restart the
+service (or redeploy) to pick up changes.
+
 ## Verify deployment
 
 ```bash

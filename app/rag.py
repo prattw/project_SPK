@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from app.citations import citations_from_chunks, filter_citations_to_answer
 from app.config import settings
 from app.context_budget import cap_chunk_records, cap_chunks, pack_chunks_for_llm, prepare_text_for_ingest
-from app.doc_metadata import classify_upload_origin, enrich_library_fields
+from app.doc_metadata import classify_upload_origin, enrich_library_fields, infer_doc_metadata
+from app.library_groups import library_group
 from app.usace_dates import normalize_doc_number
 from app.embeddings import embed_query, embed_texts
 from app.llm import generate_answer, generate_general_answer
@@ -161,6 +162,16 @@ class RAGService:
             entry["updated_at"] = entry.get("indexed_at")
             entry["upload_origin"] = classify_upload_origin(source, entry)
             entry.update(enrich_library_fields(source, entry))
+            if not entry.get("category"):
+                # Chunks indexed before category inference existed still need a home page.
+                inferred = infer_doc_metadata(source)
+                entry["category"] = inferred.get("category")
+                for key in ("doc_number", "doc_type"):
+                    if not entry.get(key) and inferred.get(key):
+                        entry[key] = inferred[key]
+            entry["library_group"] = library_group(
+                entry.get("category"), entry.get("doc_number"), source
+            )
             entry["url"] = None  # filled by API layer via citations helper
             docs.append(entry)
 

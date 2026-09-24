@@ -3,7 +3,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -24,6 +24,13 @@ from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
 from app.jobs import get_job, start_background_ingest, start_background_library_ingest, start_background_query
+from app.library_groups import (
+    GROUP_DESCRIPTIONS,
+    GROUP_LABELS,
+    GROUP_ORDER,
+    group_summary,
+    normalize_group,
+)
 from app.library_ingest import (
     extract_incoming_zip,
     library_incoming_path,
@@ -223,7 +230,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Project SPK",
     description="Construction document RAG — upload, compare, and ask questions.",
-    version="0.8.1",
+    version="0.9.0",
     lifespan=lifespan,
 )
 
@@ -312,9 +319,7 @@ def health() -> HealthResponse:
     )
 
 
-@app.get("/files", response_model=FilesResponse)
-def list_files(request: Request) -> FilesResponse:
-    require_api_key(request)
+def _documents_with_urls() -> list[dict]:
     rag = get_rag()
     documents = rag.list_documents()
     for doc in documents:
@@ -323,11 +328,76 @@ def list_files(request: Request) -> FilesResponse:
             doc.get("source"),
             upload_origin=doc.get("upload_origin"),
         )
+    return documents
+
+
+@app.get("/files", response_model=FilesResponse)
+def list_files(
+    request: Request,
+    group: str | None = Query(default=None, description="Library index page: engineering | contracting-law | discipline-knowledge"),
+    origin: str | None = Query(default=None, description="Filter by upload origin: library | user"),
+) -> FilesResponse:
+    require_api_key(request)
+    rag = get_rag()
+    documents = _documents_with_urls()
+
+    if origin:
+        wanted_origin = origin.strip().lower()
+        documents = [d for d in documents if (d.get("upload_origin") or "") == wanted_origin]
+
+    if group:
+        wanted_group = normalize_group(group)
+        if not wanted_group:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown library group '{group}'. Expected one of: {', '.join(GROUP_ORDER)}.",
+            )
+        documents = [d for d in documents if d.get("library_group") == wanted_group]
+
     return FilesResponse(
         files=[d["source"] for d in documents],
         documents=documents,
         chunks_indexed=rag.document_count,
     )
+
+
+@app.get("/library/groups")
+def list_library_groups(request: Request) -> dict:
+    """Document counts for each of the three Document Library index pages."""
+    require_api_key(request)
+    library_docs = [
+        d for d in _documents_with_urls() if (d.get("upload_origin") or "") == "library"
+    ]
+    return {
+        "groups": group_summary(library_docs),
+        "library_documents": len(library_docs),
+    }
+
+
+@app.get("/library/groups/{group}")
+def list_library_group(request: Request, group: str) -> dict:
+    """The document index for one library page (Engineering, Contracting & Law, Discipline Knowledge)."""
+    require_api_key(request)
+    wanted_group = normalize_group(group)
+    if not wanted_group:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown library group '{group}'. Expected one of: {', '.join(GROUP_ORDER)}.",
+        )
+
+    documents = [
+        d
+        for d in _documents_with_urls()
+        if (d.get("upload_origin") or "") == "library"
+        and d.get("library_group") == wanted_group
+    ]
+    return {
+        "group": wanted_group,
+        "label": GROUP_LABELS[wanted_group],
+        "description": GROUP_DESCRIPTIONS[wanted_group],
+        "count": len(documents),
+        "documents": documents,
+    }
 
 
 @app.get("/download/{filename}")

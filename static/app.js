@@ -278,7 +278,10 @@ function showView(name) {
   document.getElementById("view-library").hidden = name !== "library";
   document.getElementById("view-uploads").hidden = name !== "uploads";
   if (name === "uploads") refreshUploads();
-  if (name === "library") refreshLibraryLinks();
+  if (name === "library") {
+    loadLibraryGroupCounts();
+    showLibraryPage(libraryPageCurrent);
+  }
 }
 
 document.querySelectorAll(".tab[data-view]").forEach((t) => {
@@ -883,6 +886,154 @@ async function refreshLibraryLinks() {
   }
 }
 
+/* ---------- Document Library index pages ---------- */
+
+const LIBRARY_PAGES = ["all", "engineering", "contracting-law", "discipline-knowledge"];
+
+let libraryPageCurrent = "all";
+let libraryGroupCache = new Map();
+let libraryCountsLoaded = false;
+
+function libraryGroupSearchHaystack(doc) {
+  return [doc.doc_number, doc.display_title, doc.title, doc.source, doc.doc_type]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function renderLibraryGroupList(docs, filter) {
+  const listEl = document.getElementById("libraryGroupList");
+  const countEl = document.getElementById("libraryGroupCount");
+  if (!listEl) return;
+
+  const needle = (filter || "").trim().toLowerCase();
+  const shown = needle
+    ? docs.filter((d) => libraryGroupSearchHaystack(d).includes(needle))
+    : docs;
+
+  if (countEl) {
+    countEl.textContent = needle
+      ? `${shown.length} of ${docs.length} documents`
+      : `${docs.length} documents`;
+  }
+
+  if (!shown.length) {
+    listEl.innerHTML = `<div class="library-list-empty">${
+      needle ? "No documents in this index match your filter." : "No documents in this index yet."
+    }</div>`;
+    return;
+  }
+  listEl.innerHTML = shown.map(renderLibraryItem).join("");
+}
+
+const LIBRARY_GROUP_CACHE_MS = 60_000;
+
+async function loadLibraryGroup(group) {
+  const cached = libraryGroupCache.get(group);
+  if (cached && Date.now() - cached.fetchedAt < LIBRARY_GROUP_CACHE_MS) return cached;
+
+  const res = await apiFetch(`/library/groups/${encodeURIComponent(group)}`);
+  const data = await readJsonResponse(res);
+  if (!res.ok) {
+    throw new Error(formatApiError(data.detail, "Could not load this document index."));
+  }
+  const payload = {
+    label: data.label || "",
+    description: data.description || "",
+    documents: data.documents || [],
+    fetchedAt: Date.now(),
+  };
+  libraryGroupCache.set(group, payload);
+  return payload;
+}
+
+async function renderLibraryGroupPage(group) {
+  const titleEl = document.getElementById("libraryGroupTitle");
+  const descEl = document.getElementById("libraryGroupDesc");
+  const listEl = document.getElementById("libraryGroupList");
+  const searchEl = document.getElementById("libraryGroupSearch");
+  if (!titleEl || !listEl) return;
+
+  listEl.innerHTML = `<div class="library-list-empty">Loading index&hellip;</div>`;
+  try {
+    const payload = await loadLibraryGroup(group);
+    titleEl.textContent = payload.label;
+    if (descEl) descEl.textContent = payload.description;
+    renderLibraryGroupList(payload.documents, searchEl ? searchEl.value : "");
+  } catch (err) {
+    listEl.innerHTML = `<div class="library-list-empty">${escapeHtml(
+      err.message || "Could not load this document index."
+    )}</div>`;
+  }
+}
+
+async function loadLibraryGroupCounts() {
+  if (libraryCountsLoaded) return;
+  try {
+    const res = await apiFetch("/library/groups");
+    const data = await readJsonResponse(res);
+    if (!res.ok) return;
+    libraryCountsLoaded = true;
+
+    (data.groups || []).forEach((g) => {
+      const el = document.querySelector(`.library-page-count[data-count-for="${g.group}"]`);
+      if (el) el.textContent = ` (${g.documents.toLocaleString()})`;
+    });
+    const allEl = document.querySelector('.library-page-count[data-count-for="all"]');
+    if (allEl && typeof data.library_documents === "number") {
+      allEl.textContent = ` (${data.library_documents.toLocaleString()})`;
+    }
+  } catch {
+    /* counts are decoration — a failure must not hide the indexes */
+  }
+}
+
+function showLibraryPage(page, { updateHash = true } = {}) {
+  const target = LIBRARY_PAGES.includes(page) ? page : "all";
+  libraryPageCurrent = target;
+
+  document.querySelectorAll(".library-page-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.libraryPage === target);
+  });
+
+  const allPage = document.getElementById("libraryPage-all");
+  const groupPage = document.getElementById("libraryPage-group");
+  if (allPage) allPage.hidden = target !== "all";
+  if (groupPage) groupPage.hidden = target === "all";
+
+  if (updateHash) {
+    const hash = target === "all" ? "#library" : `#library/${target}`;
+    if (location.hash !== hash) history.replaceState(null, "", hash);
+  }
+
+  if (target === "all") {
+    refreshLibraryLinks();
+  } else {
+    renderLibraryGroupPage(target);
+  }
+}
+
+function initLibraryPages() {
+  document.querySelectorAll(".library-page-tab").forEach((btn) => {
+    btn.addEventListener("click", () => showLibraryPage(btn.dataset.libraryPage));
+  });
+
+  const searchEl = document.getElementById("libraryGroupSearch");
+  if (searchEl) {
+    searchEl.addEventListener("input", () => {
+      const payload = libraryGroupCache.get(libraryPageCurrent);
+      if (payload) renderLibraryGroupList(payload.documents, searchEl.value);
+    });
+  }
+}
+
+/** Library pages are deep-linkable: #library/engineering opens that index directly. */
+function libraryPageFromHash() {
+  const match = /^#library(?:\/([a-z-]+))?$/.exec(location.hash || "");
+  if (!match) return null;
+  return LIBRARY_PAGES.includes(match[1]) ? match[1] : "all";
+}
+
 async function refreshUploads() {
   try {
     const res = await apiFetch("/files");
@@ -1419,7 +1570,16 @@ document.addEventListener("keydown", (e) => {
 
 async function initApp() {
   await loadLimits();
+  initLibraryPages();
   await refreshUploads();
+
+  // Deep link (#library/engineering) opens that index straight away.
+  const deepLinked = libraryPageFromHash();
+  if (deepLinked) {
+    libraryPageCurrent = deepLinked;
+    showView("library");
+    return;
+  }
   await refreshLibraryLinks();
 }
 

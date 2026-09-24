@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project SPK — USACE Policies and Publications AI Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.4" />
+  <link rel="stylesheet" href="/static/style.css?v=0.9.6" />
 </head>
 <body>
   <!-- Email login gate (first screen) -->
@@ -128,7 +128,42 @@
           <div class="docs-head">
             <h2>Document Library</h2>
           </div>
-          <p class="docs-desc">USACE policies, regulations, and publications indexed for retrieval.</p>
+          <p class="docs-desc">USACE policies, regulations, and publications indexed for retrieval. Pick an index below.</p>
+
+          <nav class="library-pages" id="libraryPages" aria-label="Document Library indexes">
+            <button type="button" class="library-page-tab active" data-library-page="all">
+              All Documents<span class="library-page-count" data-count-for="all"></span>
+            </button>
+            <button type="button" class="library-page-tab" data-library-page="engineering">
+              Government Engineering<span class="library-page-count" data-count-for="engineering"></span>
+            </button>
+            <button type="button" class="library-page-tab" data-library-page="contracting-law">
+              Government Contracting &amp; Law<span class="library-page-count" data-count-for="contracting-law"></span>
+            </button>
+            <button type="button" class="library-page-tab" data-library-page="discipline-knowledge">
+              Discipline Knowledge<span class="library-page-count" data-count-for="discipline-knowledge"></span>
+            </button>
+          </nav>
+
+          <!-- Index page: one of the three subject groups, rendered from /library/groups/{group} -->
+          <div id="libraryPage-group" class="library-page" hidden>
+            <h3 class="library-group-title" id="libraryGroupTitle"></h3>
+            <p class="library-group-desc" id="libraryGroupDesc"></p>
+            <div class="library-group-toolbar">
+              <input
+                type="search"
+                id="libraryGroupSearch"
+                class="library-group-search"
+                placeholder="Filter this index by number, title, or filename..."
+                autocomplete="off"
+              />
+              <span class="library-group-count" id="libraryGroupCount"></span>
+            </div>
+            <div id="libraryGroupList" class="library-list"></div>
+          </div>
+
+          <!-- Index page: every indexed library document -->
+          <div id="libraryPage-all" class="library-page">
           <div class="library-sources">
             <h3 class="library-sources-title">USACE Publications — source listings</h3>
             <p class="library-sources-desc">These official category pages are checked for newly listed documents at the start of each session.</p>
@@ -2013,6 +2048,7 @@
             <div class="library-item"><a href="https://www.publications.usace.army.mil/SearchResults.aspx?search=USC54%40119-88" target="_blank" rel="noopener">USC54@119-88</a>, Usc54@119-88<span class="lib-updated">, published: —</span></div>
           <!-- LIBRARY_LIST_END -->
           </div>
+          </div>
         </div>
       </section>
 
@@ -2078,6 +2114,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.4"></script>
+  <script src="/static/app.js?v=0.9.6"></script>
 </body>
 </html>
