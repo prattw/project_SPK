@@ -473,6 +473,59 @@ check("regrouped document now on the discipline page", "ER 1110-1-8162.txt" in s
 eng = {d["source"] for d in client.get(f"/library/groups/{ENGINEERING}", headers=auth).json()["documents"]}
 check("and off the engineering page", "ER 1110-1-8162.txt" not in eng)
 
+# A filename that names a publication, filed somewhere that disagrees, must stop
+# presenting itself as that publication.
+section("A filed document does not masquerade as the publication it names")
+
+clear_incoming()
+reset_manifest()
+save_incoming_upload(text_file("x"), "AR 420-1 Class Handout.txt", "discipline-knowledge")
+save_incoming_upload(text_file("x"), "ARN15118_AR 420-1_FINAL.txt", None)
+run_library_ingest(library_incoming_path())
+
+page = client.get(f"/library/groups/{DISCIPLINE_KNOWLEDGE}", headers=auth).json()
+handout = next((d for d in page["documents"] if d["source"] == "AR 420-1 Class Handout.txt"), None)
+check("handout is on the discipline page", handout is not None)
+check("handout no longer claims the AR number", handout and handout["doc_number"] is None, str(handout)[:160])
+check("handout keeps its own title", handout and "Class Handout" in (handout["display_title"] or ""))
+check("handout links to the file, not the regulation",
+      handout and "publications.usace.army.mil" not in (handout["url"] or ""), str(handout and handout["url"]))
+check("handout link is a download", handout and "/download/" in (handout["url"] or ""), str(handout and handout["url"]))
+
+eng = client.get(f"/library/groups/{ENGINEERING}", headers=auth).json()
+real = next((d for d in eng["documents"] if d["source"] == "ARN15118_AR 420-1_FINAL.txt"), None)
+check("the actual regulation is on engineering", real is not None)
+check("the actual regulation keeps its number", real and real["doc_number"] == "AR 420-1", str(real)[:160])
+
+# Both link to the local copy here because both files are on disk, and serving the
+# file we hold beats sending someone to the portal. The distinction that matters is
+# whether the document still claims to *be* the publication: with the number
+# suppressed, nothing resolves to the official copy.
+from app.downloads import document_link_url  # noqa: E402
+
+check(
+    "a real publication with no local copy resolves to the official one",
+    "publications.usace.army.mil" in document_link_url("AR 420-1", "Not On Disk.pdf", upload_origin="library"),
+)
+check(
+    "a suppressed number cannot resolve to the official one",
+    "publications.usace.army.mil" not in document_link_url(None, "Not On Disk.pdf", upload_origin="library"),
+)
+
+# Moving a real publication between pages must not strip its identity, since the
+# filename and the document agree about what it is.
+get_rag().assign_library_group(["ARN15118_AR 420-1_FINAL.txt"], "engineering")
+eng = client.get(f"/library/groups/{ENGINEERING}", headers=auth).json()
+real = next((d for d in eng["documents"] if d["source"] == "ARN15118_AR 420-1_FINAL.txt"), None)
+check("an agreeing assignment leaves the number intact", real and real["doc_number"] == "AR 420-1", str(real)[:160])
+
+# The cached document list must not be damaged by display-only adjustments.
+docs = get_rag().list_documents()
+cached = next(d for d in docs if d["source"] == "AR 420-1 Class Handout.txt")
+check("display adjustment did not mutate the cache", cached["doc_number"] == "AR 420-1", str(cached)[:160])
+check("routing still sees the real number",
+      {r["group"]: r["documents"] for r in group_summary(docs)}[DISCIPLINE_KNOWLEDGE] >= 1)
+
 resp = client.post("/admin/library/regroup", headers=auth, json={"group": "engineering", "patterns": ["zzzz"]})
 check("regroup with no matches is a 400", resp.status_code == 400, resp.text)
 resp = client.post("/admin/library/regroup", headers=auth, json={"group": "nope", "sources": ["x.pdf"]})

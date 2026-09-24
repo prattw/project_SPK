@@ -29,6 +29,7 @@ from app.library_groups import (
     GROUP_LABELS,
     GROUP_ORDER,
     group_summary,
+    library_group,
     normalize_group,
 )
 from app.library_ingest import (
@@ -346,15 +347,40 @@ def health() -> HealthResponse:
     )
 
 
+def _misfiled_publication_number(doc: dict) -> bool:
+    """True when a document's filename names a publication that is not this document.
+
+    "AR 420-1 Class Handout.pdf" infers the doc number AR 420-1, which would show
+    it as that regulation and link to the official copy. Someone filing it on a
+    page that disagrees with that inference has said it is not the regulation, so
+    the number describes source material and must not stand in for the document.
+    """
+    assigned = normalize_group(doc.get("assigned_group") or "")
+    if not assigned or not doc.get("doc_number"):
+        return False
+    inferred = library_group(doc.get("category"), doc.get("doc_number"), doc.get("source"))
+    return inferred != assigned
+
+
 def _documents_with_urls() -> list[dict]:
+    """Library documents with display fields resolved, as copies.
+
+    The underlying list is cached and reused by routing and retrieval, so display
+    adjustments are made on copies rather than written back into it.
+    """
     rag = get_rag()
-    documents = rag.list_documents()
-    for doc in documents:
+    documents = []
+    for entry in rag.list_documents():
+        doc = dict(entry)
+        if _misfiled_publication_number(doc):
+            doc["doc_number"] = None
+            doc["display_title"] = doc.get("title") or doc.get("source")
         doc["url"] = document_link_url(
             doc.get("doc_number"),
             doc.get("source"),
             upload_origin=doc.get("upload_origin"),
         )
+        documents.append(doc)
     return documents
 
 
