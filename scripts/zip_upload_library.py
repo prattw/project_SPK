@@ -15,8 +15,12 @@ Usage:
 
   # File an entire folder on one Document Library index page, regardless of
   # what the filenames look like:
-  python3 scripts/zip_upload_library.py "D:/Project SPK folder/Master Library" \
+  python3 scripts/zip_upload_library.py "~/Documents/Project SPK folder/Master Library" \
     --group discipline-knowledge
+
+  # On Windows use `python`, set the vars with `$env:SPK_URL = "..."`, and quote
+  # the folder (these paths contain spaces and parentheses):
+  #   python scripts\\zip_upload_library.py "C:\\Users\\YOU\\Documents\\Project SPK folder\\Master Library" --group discipline-knowledge
 
   # Dry run (no upload, just show what would happen):
   python3 scripts/zip_upload_library.py "/path/to/folder" --dry-run
@@ -188,7 +192,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    root = Path(args.root)
+    root = Path(args.root).expanduser()
     if not root.is_dir():
         print(f"Not a directory: {root}", file=sys.stderr)
         return 1
