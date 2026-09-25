@@ -1,27 +1,23 @@
 # Project SPK — Construction Document RAG
 
-Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. Powered by **OpenAI** (GPT + embeddings).
+Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. It runs on a Mac mini with [Ollama](MAC_MINI.md) doing the answers, embeddings, and scanned-page reading. A Railway deployment that calls the OpenAI API is the previous setup, documented in [DEPLOY.md](DEPLOY.md).
 
-## Recommended stack (your questions)
+## Where it runs
 
-### Hosting
-
-| Option | Best for | Why |
-|--------|----------|-----|
-| **[Railway](https://railway.app)** | **Start here** | Docker deploy, persistent volumes for `chroma_db` + `data`, simple env vars, good for 100MB uploads |
-| **[Fly.io](https://fly.io)** | Global / low latency | Same as Railway; volumes + regions; slightly more ops |
-| **Render** | Managed simplicity | Similar to Railway; watch cold starts on free tier |
-| **AWS (ECS/EC2) + S3** | Enterprise / large files | When you need SSO, VPC, or many GB of drawings |
-
-**Avoid** serverless-only hosts (e.g. Vercel functions) as the primary API — RAG needs a long-running process and disk for Chroma.
-
-**Practical pick:** Railway or Fly.io with Docker, persistent volume, and later S3 for raw uploads if files grow past ~100MB.
+On the Mac mini. [MAC_MINI.md](MAC_MINI.md) is the setup: Ollama on that Mac,
+a fresh search index (the Railway one cannot be reused), and the app listening
+on the local network for the two people on the roster.
 
 ### LLMs
 
-- **Answers + embeddings:** [OpenAI API](https://platform.openai.com/) — GPT (`gpt-4o-mini` by default) and `text-embedding-3-small` with a single `OPENAI_API_KEY`.
+- **Answers:** a local Qwen model via Ollama, sized to the Mac's memory.
+- **Embeddings:** `nomic-embed-text`, also local. Changing this model means
+  rebuilding the index.
+- **Scanned pages:** a local vision model (`OPENAI_VISION_MODEL`), because the
+  chat model cannot read an image.
 
-**Note:** ChatGPT Plus/Pro is not the same as the API — you need an API key from the OpenAI platform (pay-as-you-go; often a few dollars for testing).
+The OpenAI client is still the code that makes those calls. `OPENAI_BASE_URL`
+points it at `http://127.0.0.1:11434/v1` instead of `api.openai.com`.
 
 ### UI
 
@@ -53,7 +49,8 @@ Open **http://localhost:8000** — upload files and chat.
 
 ## Deploy online
 
-See **[DEPLOY.md](DEPLOY.md)** for a full Railway guide (volumes, env vars, public URL).
+The current deployment is the Mac mini ([MAC_MINI.md](MAC_MINI.md)).
+**[DEPLOY.md](DEPLOY.md)** is the previous Railway guide.
 
 Quick checklist:
 

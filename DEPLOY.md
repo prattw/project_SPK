@@ -1,5 +1,10 @@
 # Deploy Project SPK (Railway)
 
+The app now runs on a Mac mini with Ollama. Follow **[MAC_MINI.md](MAC_MINI.md)**
+for that. This page is the previous Railway deployment, kept because the
+service is still up until the Mac has rebuilt the index and answered a
+question correctly.
+
 ## Prerequisites
 
 - [Railway](https://railway.app) account

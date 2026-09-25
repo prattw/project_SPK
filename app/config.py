@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     # Leave blank to use the OpenAI SDK default (https://api.openai.com/v1).
     openai_base_url: str = ""
     openai_model: str = "gpt-4o-mini"
+    # Blank uses openai_model. Set this when the chat model cannot read images
+    # (a local text model) and a second vision model handles scanned-page OCR.
+    openai_vision_model: str = ""
     openai_max_tokens: int = 4096
     openai_embedding_model: str = "text-embedding-3-small"
     embedding_provider: str = "openai"
