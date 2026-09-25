@@ -1,8 +1,9 @@
 # Project SPK on a Mac mini
 
-The app runs on the Mac mini. Ollama runs on the same Mac and does every model
-job the OpenAI API used to do: answers, embeddings, and reading scanned pages.
-Documents and questions stay on that machine.
+The app runs on the Mac mini, and the same way on a Windows laptop when there
+is no network. [WINDOWS.md](WINDOWS.md) is that laptop. Ollama on each machine
+does every model job the OpenAI API used to do: answers, embeddings, and
+reading scanned pages. Documents and questions stay on that machine.
 
 Railway can keep serving until this Mac answers a real question correctly.
 Then stop the Railway service. Do not copy its Chroma database over — those
@@ -90,3 +91,12 @@ Stop the Railway service. Keep its volume until you have asked something you
 can check against a known document and the citation is right. Usage history
 from Railway does not come along; the Mac starts a new `usage.db` under
 `data/`.
+
+## The Windows laptop
+
+Once this Mac's index was built with `nomic-embed-text`, that index can be
+copied onto the laptop. Both machines use the same embedding model and the
+same prefixes. Stop the server on both sides and copy `chroma_db_mac/` to the
+laptop as `chroma_db_laptop/`, and copy `data/` the same way. The steps are in
+[WINDOWS.md](WINDOWS.md). Do not copy the Railway Chroma database to either
+machine.

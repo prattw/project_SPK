@@ -11,6 +11,7 @@ data/*
 !data/.gitkeep
 chroma_db/
 chroma_db_mac/
+chroma_db_laptop/
 
 # Auth / WebAuthn credential store — never commit
 auth.db

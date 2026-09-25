@@ -1,16 +1,18 @@
 # Project SPK — Construction Document RAG
 
-Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. It runs on a Mac mini with [Ollama](MAC_MINI.md) doing the answers, embeddings, and scanned-page reading. A Railway deployment that calls the OpenAI API is the previous setup, documented in [DEPLOY.md](DEPLOY.md).
+Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. It runs on a Mac mini with [Ollama](MAC_MINI.md), and the same way on a Windows laptop with no network ([WINDOWS.md](WINDOWS.md)). A Railway deployment that calls the OpenAI API is the previous setup, documented in [DEPLOY.md](DEPLOY.md).
 
 ## Where it runs
 
-On the Mac mini. [MAC_MINI.md](MAC_MINI.md) is the setup: Ollama on that Mac,
-a fresh search index (the Railway one cannot be reused), and the app listening
-on the local network for the two people on the roster.
+On the Mac mini, for the two people on the roster, and on a Windows laptop
+that has to work with no network. [MAC_MINI.md](MAC_MINI.md) and
+[WINDOWS.md](WINDOWS.md) are the setup. Both use Ollama and a fresh search
+index (the Railway one cannot be reused). The Mac listens on the local
+network. The laptop listens only on itself.
 
 ### LLMs
 
-- **Answers:** a local Qwen model via Ollama, sized to the Mac's memory.
+- **Answers:** a local Qwen model via Ollama, sized to the machine's memory.
 - **Embeddings:** `nomic-embed-text`, also local. Changing this model means
   rebuilding the index.
 - **Scanned pages:** a local vision model (`OPENAI_VISION_MODEL`), because the

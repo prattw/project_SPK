@@ -11,6 +11,7 @@ fi
 if [[ ! -f .env ]]; then
   echo "Copy .env.example to .env and add your API keys before uploading or chatting."
   echo "On a Mac mini running Ollama, use .env.mac.example instead. See MAC_MINI.md."
+  echo "On the Windows laptop, use .env.windows.example instead. See WINDOWS.md."
   echo "The UI will still load without keys."
 fi
 
@@ -35,4 +36,5 @@ exec .venv/bin/uvicorn app.main:app --reload --host "$HOST_ADDR" --port "$PORT_N
   --reload-exclude 'data/*' \
   --reload-exclude 'chroma_db/*' \
   --reload-exclude 'chroma_db_mac/*' \
+  --reload-exclude 'chroma_db_laptop/*' \
   --reload-exclude 'auth.db'
