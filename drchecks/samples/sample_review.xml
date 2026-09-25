@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DrChecksExport>
+  <Comment>
+    <CommentID>1001</CommentID>
+    <Discipline>Civil</Discipline>
+    <Document>C-101</Document>
+    <SpecSection>33 40 00</SpecSection>
+    <CommentText>Sheet C-101 cites ER 1110-1-1807 for the storm drain work. Confirm the project criteria use that publication, and state the edition.</CommentText>
+    <Status>Open</Status>
+    <Criticality>Comment</Criticality>
+    <Reviewer>A. Reviewer</Reviewer>
+  </Comment>
+  <Comment>
+    <CommentID>1002</CommentID>
+    <Discipline>Security</Discipline>
+    <Document>G-002</Document>
+    <SpecSection>01 11 00</SpecSection>
+    <CommentText>The general sheet cites UFC 4-010-01. Confirm it is the edition required by the project criteria before treating the antiterrorism provisions as current.</CommentText>
+    <ResponseText>Concur. The next issue of the drawings will cite the UFC edition named in the design criteria.</ResponseText>
+    <Status>Evaluated</Status>
+    <Criticality>Comment</Criticality>
+    <Reviewer>A. Reviewer</Reviewer>
+    <Evaluator>B. Designer</Evaluator>
+  </Comment>
+</DrChecksExport>
