@@ -1,6 +1,6 @@
 # Project SPK — Construction Document RAG
 
-Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. Powered by **OpenAI** (GPT + embeddings).
+Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. The live app is still on Railway, powered by **OpenAI** (GPT + embeddings). A Mac mini self-host that uses Ollama instead is built and documented in [MAC_MINI.md](MAC_MINI.md). It is not in use until that Mac is set up.
 
 ## Recommended stack (your questions)
 
@@ -8,18 +8,20 @@ Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, an
 
 | Option | Best for | Why |
 |--------|----------|-----|
-| **[Railway](https://railway.app)** | **Start here** | Docker deploy, persistent volumes for `chroma_db` + `data`, simple env vars, good for 100MB uploads |
+| **[Railway](https://railway.app)** | **Where it runs today** | Docker deploy, persistent volumes for `chroma_db` + `data`, simple env vars, good for 100MB uploads |
+| **Mac mini + Ollama** | **Built, not switched on** | Same app, local models, no OpenAI calls. Follow [MAC_MINI.md](MAC_MINI.md) when you are ready. Railway stays up until then. |
 | **[Fly.io](https://fly.io)** | Global / low latency | Same as Railway; volumes + regions; slightly more ops |
 | **Render** | Managed simplicity | Similar to Railway; watch cold starts on free tier |
 | **AWS (ECS/EC2) + S3** | Enterprise / large files | When you need SSO, VPC, or many GB of drawings |
 
 **Avoid** serverless-only hosts (e.g. Vercel functions) as the primary API — RAG needs a long-running process and disk for Chroma.
 
-**Practical pick:** Railway or Fly.io with Docker, persistent volume, and later S3 for raw uploads if files grow past ~100MB.
+**Practical pick:** Railway, until the Mac mini in [MAC_MINI.md](MAC_MINI.md) has its own index and has answered a question you can check.
 
 ### LLMs
 
-- **Answers + embeddings:** [OpenAI API](https://platform.openai.com/) — GPT (`gpt-4o-mini` by default) and `text-embedding-3-small` with a single `OPENAI_API_KEY`.
+- **Railway today:** [OpenAI API](https://platform.openai.com/) — GPT (`gpt-4o-mini` by default) and `text-embedding-3-small` with a single `OPENAI_API_KEY`.
+- **Mac mini, when you set it up:** a local Qwen model, `nomic-embed-text`, and a vision model for scanned pages, all via Ollama. `OPENAI_BASE_URL` points the existing client at `http://127.0.0.1:11434/v1`. The Railway index cannot be copied over; it was embedded with a different model.
 
 **Note:** ChatGPT Plus/Pro is not the same as the API — you need an API key from the OpenAI platform (pay-as-you-go; often a few dollars for testing).
 
@@ -53,7 +55,7 @@ Open **http://localhost:8000** — upload files and chat.
 
 ## Deploy online
 
-See **[DEPLOY.md](DEPLOY.md)** for a full Railway guide (volumes, env vars, public URL).
+See **[DEPLOY.md](DEPLOY.md)** for the Railway guide (volumes, env vars, public URL). The Mac mini self-host is separate: [MAC_MINI.md](MAC_MINI.md).
 
 Quick checklist:
 

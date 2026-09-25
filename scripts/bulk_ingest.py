@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -25,7 +26,30 @@ from app.ingest import discover_documents, ingest_path  # noqa: E402
 from app.rag import get_rag  # noqa: E402
 
 
-LOCK_FILE = Path("/tmp/spk_bulk_ingest.pid")
+LOCK_FILE = Path(tempfile.gettempdir()) / "spk_bulk_ingest.pid"
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when pid is a running process.
+
+    On Windows, os.kill(pid, 0) terminates the process. Query it instead.
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def acquire_lock() -> bool:
@@ -33,11 +57,11 @@ def acquire_lock() -> bool:
     if LOCK_FILE.exists():
         try:
             old_pid = int(LOCK_FILE.read_text().strip())
-            os.kill(old_pid, 0)  # raises if process is gone
+        except ValueError:
+            old_pid = 0
+        if _pid_alive(old_pid):
             print(f"Another bulk ingest is already running (pid {old_pid}). Aborting.")
             return False
-        except (ValueError, ProcessLookupError, PermissionError):
-            pass  # stale lock
     LOCK_FILE.write_text(str(os.getpid()))
     return True
 

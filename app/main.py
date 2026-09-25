@@ -235,7 +235,10 @@ def _require_keys() -> None:
     if not settings.openai_api_key:
         raise HTTPException(
             status_code=503,
-            detail="OPENAI_API_KEY is not configured. Add it in Railway Variables or .env.",
+            detail=(
+                "The language model is not configured. For Ollama, set "
+                "OPENAI_API_KEY=ollama and OPENAI_BASE_URL=http://127.0.0.1:11434/v1 in .env."
+            ),
         )
     provider = settings.embedding_provider.lower()
     if provider == "voyage" and not settings.voyage_api_key:
@@ -256,7 +259,8 @@ def _warm_index() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if not settings.openai_api_key:
-        print("Warning: OPENAI_API_KEY not set — get one at platform.openai.com.")
+        where = "a local Ollama server" if settings.openai_base_url else "the language-model API"
+        print(f"Warning: OPENAI_API_KEY not set — {where} will refuse requests.")
     init_usage_db()
     start_weekly_usage_scheduler()
     # Warm the vector index in a background thread so the first user request
@@ -340,7 +344,11 @@ def health() -> HealthResponse:
         version=app.version,
         documents_indexed=0,
         data_dir=str(settings.data_path),
-        llm=settings.openai_model,
+        llm=(
+            f"{settings.openai_model} (vision: {settings.openai_vision_model})"
+            if settings.openai_vision_model and settings.openai_vision_model != settings.openai_model
+            else settings.openai_model
+        ),
         embeddings=f"{settings.embedding_provider}:{settings.openai_embedding_model if settings.embedding_provider == 'openai' else settings.voyage_embedding_model}",
         auth_required=auth_required(),
         llm_configured=bool(settings.openai_api_key),
