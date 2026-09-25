@@ -1,25 +1,29 @@
 # Project SPK — Construction Document RAG
 
-Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. It runs on a Mac mini with [Ollama](MAC_MINI.md), and the same way on a Windows laptop with no network ([WINDOWS.md](WINDOWS.md)). A Railway deployment that calls the OpenAI API is the previous setup, documented in [DEPLOY.md](DEPLOY.md).
+Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. The live app is still on Railway, powered by **OpenAI** (GPT + embeddings). A Mac mini self-host that uses Ollama instead is built and documented in [MAC_MINI.md](MAC_MINI.md). It is not in use until that Mac is set up.
 
-## Where it runs
+## Recommended stack (your questions)
 
-On the Mac mini, for the two people on the roster, and on a Windows laptop
-that has to work with no network. [MAC_MINI.md](MAC_MINI.md) and
-[WINDOWS.md](WINDOWS.md) are the setup. Both use Ollama and a fresh search
-index (the Railway one cannot be reused). The Mac listens on the local
-network. The laptop listens only on itself.
+### Hosting
+
+| Option | Best for | Why |
+|--------|----------|-----|
+| **[Railway](https://railway.app)** | **Where it runs today** | Docker deploy, persistent volumes for `chroma_db` + `data`, simple env vars, good for 100MB uploads |
+| **Mac mini + Ollama** | **Built, not switched on** | Same app, local models, no OpenAI calls. Follow [MAC_MINI.md](MAC_MINI.md) when you are ready. Railway stays up until then. |
+| **[Fly.io](https://fly.io)** | Global / low latency | Same as Railway; volumes + regions; slightly more ops |
+| **Render** | Managed simplicity | Similar to Railway; watch cold starts on free tier |
+| **AWS (ECS/EC2) + S3** | Enterprise / large files | When you need SSO, VPC, or many GB of drawings |
+
+**Avoid** serverless-only hosts (e.g. Vercel functions) as the primary API — RAG needs a long-running process and disk for Chroma.
+
+**Practical pick:** Railway, until the Mac mini in [MAC_MINI.md](MAC_MINI.md) has its own index and has answered a question you can check.
 
 ### LLMs
 
-- **Answers:** a local Qwen model via Ollama, sized to the machine's memory.
-- **Embeddings:** `nomic-embed-text`, also local. Changing this model means
-  rebuilding the index.
-- **Scanned pages:** a local vision model (`OPENAI_VISION_MODEL`), because the
-  chat model cannot read an image.
+- **Railway today:** [OpenAI API](https://platform.openai.com/) — GPT (`gpt-4o-mini` by default) and `text-embedding-3-small` with a single `OPENAI_API_KEY`.
+- **Mac mini, when you set it up:** a local Qwen model, `nomic-embed-text`, and a vision model for scanned pages, all via Ollama. `OPENAI_BASE_URL` points the existing client at `http://127.0.0.1:11434/v1`. The Railway index cannot be copied over; it was embedded with a different model.
 
-The OpenAI client is still the code that makes those calls. `OPENAI_BASE_URL`
-points it at `http://127.0.0.1:11434/v1` instead of `api.openai.com`.
+**Note:** ChatGPT Plus/Pro is not the same as the API — you need an API key from the OpenAI platform (pay-as-you-go; often a few dollars for testing).
 
 ### UI
 
@@ -51,8 +55,7 @@ Open **http://localhost:8000** — upload files and chat.
 
 ## Deploy online
 
-The current deployment is the Mac mini ([MAC_MINI.md](MAC_MINI.md)).
-**[DEPLOY.md](DEPLOY.md)** is the previous Railway guide.
+See **[DEPLOY.md](DEPLOY.md)** for the Railway guide (volumes, env vars, public URL). The Mac mini self-host is separate: [MAC_MINI.md](MAC_MINI.md).
 
 Quick checklist:
 

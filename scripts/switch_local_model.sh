@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Point this machine's chat model at a different Ollama tag.
-# Works on the Mac mini and inside WSL. On native Windows use
-# scripts/windows/Switch-LocalModel.ps1.
+# Point the Mac mini's chat model at a different Ollama tag.
 #
 #   ./scripts/switch_local_model.sh qwen2.5:14b-instruct
 #

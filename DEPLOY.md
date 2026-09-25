@@ -1,10 +1,8 @@
 # Deploy Project SPK (Railway)
 
-The app now runs on a Mac mini with Ollama, and on a Windows laptop for use
-with no network. Follow **[MAC_MINI.md](MAC_MINI.md)** and
-**[WINDOWS.md](WINDOWS.md)**. This page is the previous Railway deployment,
-kept because the service is still up until the Mac has rebuilt the index and
-answered a question correctly.
+This is the live deployment. A Mac mini self-host that uses Ollama instead of
+the OpenAI API is built in **[MAC_MINI.md](MAC_MINI.md)**. Setting that Mac up
+does not change this service. Leave Railway running until you decide to switch.
 
 ## Prerequisites
 

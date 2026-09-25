@@ -164,6 +164,7 @@ http://$(hostname -s).local:8000
 Ollama itself stays on this Mac only.
 
 Leave the Mac awake while people are using it (System Settings → Energy →
-prevent automatic sleeping). Stop the Railway service only after a question
-you know the answer to comes back with the right citations.
+prevent automatic sleeping). Leave Railway running until you decide to
+switch, and only after a question you know the answer to comes back with
+the right citations.
 EOF
