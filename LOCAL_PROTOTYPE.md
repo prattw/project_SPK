@@ -48,7 +48,7 @@ servers. No app code changes — just a different `.env`.
 
 | | Laptop, CPU-only | Laptop with a small GPU (e.g. 8GB RTX 5050/4060) | Eventual RTX 5090 / PRO 6000 box |
 |---|---|---|---|
-| Model size | 3B | 7B–8B, fully in VRAM | 14B–70B+ class |
+| Model size | 3B | 8B, fully in VRAM | 14B–70B+ class |
 | Context budget | Kept modest (`MAX_CONTEXT_CHARS=40000`) | Modest, but the model itself answers faster | Expanded (60k–100k+ tokens) as planned |
 | Speed | Slow | Meaningfully faster — real CUDA acceleration, same code path as the production box | Fast — that's the whole point of the GPU purchase |
 | Purpose | De-risk the software setup | De-risk the setup *and* get a legitimate (if small-scale) preview of GPU-accelerated serving | Production-grade self-hosted serving for the team |
@@ -76,7 +76,7 @@ a Python virtualenv, installs dependencies, and writes `.env` from
 Force a specific model instead of auto-detection:
 
 ```bash
-./scripts/setup_local_prototype.sh --model qwen2.5:14b-instruct
+./scripts/setup_local_prototype.sh --model qwen3:14b
 ```
 
 ### Running Windows instead of Linux? Use WSL2
@@ -128,7 +128,7 @@ git checkout cursor/laptop-local-prototype-a548   # this branch, until merged
 ./scripts/setup_local_prototype.sh
 ```
 
-The script's GPU-detection will pick a 7-8B model automatically if it sees
+The script's GPU-detection will pick an 8B model automatically if it sees
 an 8GB-class laptop GPU (e.g. an RTX 5050/4060) — that's the sweet spot: it
 fits fully in VRAM with room for a modest context window, rather than
 spilling to slow CPU offload the way a 14B model would on 8GB.
@@ -159,7 +159,7 @@ and `app/embeddings.py` just read whatever `OPENAI_MODEL` (and
 `OPENAI_EMBEDDING_MODEL`) says in `.env`. To try a different chat model:
 
 ```bash
-./scripts/switch_local_model.sh qwen2.5:14b-instruct
+./scripts/switch_local_model.sh qwen3:14b
 ```
 
 This pulls the model with Ollama if it isn't local yet, and updates
@@ -175,9 +175,10 @@ A couple of things to know when swapping:
   and re-ingest.
 - **Agent mode needs a tool-calling model.** If you turn on Agent mode (next
   section), the model must support OpenAI-style tool/function calling.
-  Qwen2.5, Llama 3.1+, and Mistral-Nemo all do; check
+  Qwen3, Llama 3.1+, and Mistral-Nemo all do; check
   [ollama.com/search?c=tools](https://ollama.com/search?c=tools) for the
-  current list before switching.
+  current list before switching — this is also the fastest way to tell
+  whether a newer model family than whatever's named here has shown up.
 
 ## Agent mode (experimental, tool-calling)
 

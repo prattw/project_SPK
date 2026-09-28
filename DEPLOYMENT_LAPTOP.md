@@ -113,20 +113,25 @@ different features:
 - **Top-quality coding** needs a model with strong code training.
 
 These pull in the same direction more than they conflict: modern
-general-instruct models (Qwen2.5-Instruct, Llama 3.1+-Instruct) are trained
+general-instruct models (Qwen3-Instruct, Llama 3.1+-Instruct) are trained
 on large amounts of code and are genuinely competent coders, while
 staying strong at grounded RAG and instruction-following. That's why
-`setup_local_prototype.sh` already defaults to Qwen2.5-Instruct at a size
-matched to your hardware (see LOCAL_PROTOTYPE.md's sizing table) — it's a
-reasonable single model for both jobs.
+`setup_local_prototype.sh` already defaults to Qwen3 at a size matched to
+your hardware (see LOCAL_PROTOTYPE.md's sizing table) — it's a reasonable
+single model for both jobs. (This used to default to Qwen2.5 — Qwen3 is a
+generation newer and roughly one tier stronger at the same size, e.g. the
+8B performs closer to the old 14B. Local models move fast enough that it's
+worth a quick check of [ollama.com/library](https://ollama.com/library)
+every so often to see whether a newer generation has since shown up.)
 
 If you specifically want to push harder on coding at the cost of some RAG
-polish, a coder-specialized variant (e.g. `qwen2.5-coder:14b`) will write
-better code but tends to follow citation/formatting instructions less
-reliably and can be weaker at general reasoning. Try it with:
+polish, a coder-specialized variant (e.g. `qwen3-coder:30b-a3b`, or
+`qwen2.5-coder:14b` if that doesn't fit your VRAM) will write better code
+but tends to follow citation/formatting instructions less reliably and can
+be weaker at general reasoning. Try it with:
 
 ```bash
-./scripts/switch_local_model.sh qwen2.5-coder:14b
+./scripts/switch_local_model.sh qwen3-coder:30b-a3b
 ```
 
 and switch back with the same command if it doesn't hold up on the

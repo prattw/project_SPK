@@ -12,7 +12,7 @@
 #
 # Usage:
 #   ./scripts/setup_local_prototype.sh              # auto-detect model tier
-#   ./scripts/setup_local_prototype.sh --model qwen2.5:14b-instruct  # force a model
+#   ./scripts/setup_local_prototype.sh --model qwen3:14b  # force a model
 
 set -euo pipefail
 
@@ -50,21 +50,27 @@ fi
 # GPU VRAM takes priority over system RAM when a discrete NVIDIA GPU is
 # present: a model that overflows VRAM falls back to slow CPU offload, which
 # defeats the point of having a GPU at all. An 8GB card (e.g. a laptop RTX
-# 5050/4060) fits a 7-8B model at Q4 with headroom for context; it does NOT
+# 5050/4060) fits an 8B model at Q4 with headroom for context; it does NOT
 # comfortably fit a 14B model, even though 32GB of system RAM alone would
 # otherwise qualify for that tier below.
+#
+# Qwen3 (not Qwen2.5) is the default family here — each Qwen generation
+# performs roughly one tier above the last (Qwen3 8B ~= old Qwen2.5 14B), so
+# these tags get you noticeably better answers at the same VRAM/RAM cost.
+# The field moves fast; if it's been a while, check
+# https://ollama.com/library before assuming these tags are still current.
 if [[ -n "$FORCE_MODEL" ]]; then
   CHAT_MODEL="$FORCE_MODEL"
-elif (( GPU_VRAM_GB >= 20 )); then
-  CHAT_MODEL="qwen2.5:14b-instruct"
+elif (( GPU_VRAM_GB >= 24 )); then
+  CHAT_MODEL="qwen3:30b-a3b"
 elif (( GPU_VRAM_GB >= 12 )); then
-  CHAT_MODEL="qwen2.5:14b-instruct"
+  CHAT_MODEL="qwen3:14b"
 elif (( GPU_VRAM_GB >= 6 )); then
-  CHAT_MODEL="qwen2.5:7b-instruct"
+  CHAT_MODEL="qwen3:8b"
 elif (( TOTAL_RAM_GB >= 32 )); then
-  CHAT_MODEL="qwen2.5:14b-instruct"
+  CHAT_MODEL="qwen3:14b"
 elif (( TOTAL_RAM_GB >= 16 )); then
-  CHAT_MODEL="qwen2.5:7b-instruct"
+  CHAT_MODEL="qwen3:8b"
 else
   CHAT_MODEL="llama3.2:3b"
 fi
