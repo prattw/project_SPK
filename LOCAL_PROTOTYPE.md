@@ -1,5 +1,12 @@
 # Project SPK — Personal Local Prototype (Lenovo laptop)
 
+> See **[DEPLOYMENT_LAPTOP.md](DEPLOYMENT_LAPTOP.md)** for the current
+> architecture (two RAG corpora + one open-source model for both regulatory
+> answers and coding), the Deployment Laptop code-location convention, and
+> model-choice guidance. This doc has the detailed step-by-step mechanics
+> (WSL2, desktop icon, model swapping, agent mode, offline behavior) that
+> doc builds on.
+
 Purpose: give you a working sandbox to test the self-hosted architecture
 (local model instead of the OpenAI API) on your own Lenovo laptop, in the
 run-up to buying an RTX 5090 or RTX PRO 6000 Blackwell workstation. This is
@@ -320,6 +327,12 @@ so you can watch progress or leave it running in the background for a large
 library. Supported file types: `.pdf .docx .xlsx .csv .pptx .txt .md .xml
 .xer .ifc`, plus common image/CAD formats stored for reference. Unsupported
 files are skipped, not treated as errors.
+
+Add `--corpus gov` (or `--corpus textbook` for a second reference-material
+folder) to tag every chunk from that run so the two source collections stay
+distinguishable later — see
+[DEPLOYMENT_LAPTOP.md](DEPLOYMENT_LAPTOP.md#setting-up-the-two-rag-corpora)
+for why. It's a label only; both corpora are still searched together.
 
 **4. Restart the app** once it finishes:
 

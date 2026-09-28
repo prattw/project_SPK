@@ -57,10 +57,13 @@ See **[DEPLOY.md](DEPLOY.md)** for a full Railway guide (volumes, env vars, publ
 
 ## Personal local prototype (laptop, Ollama-backed)
 
-See **[LOCAL_PROTOTYPE.md](LOCAL_PROTOTYPE.md)** to run a second, independent copy of
-Project SPK on your own laptop against a local Ollama model instead of the OpenAI API —
-useful for rehearsing the self-hosted setup before buying dedicated GPU hardware.
-Production on Railway is unaffected.
+See **[DEPLOYMENT_LAPTOP.md](DEPLOYMENT_LAPTOP.md)** for the standalone, fully-offline
+laptop build — a second, independent copy of Project SPK running against a local
+open-source model (via Ollama) instead of the OpenAI API, indexing both USACE/GOV
+regulations and reference textbooks, with an experimental local agent mode. See
+**[LOCAL_PROTOTYPE.md](LOCAL_PROTOTYPE.md)** for the detailed step-by-step setup
+mechanics (WSL2, desktop icon, model swapping, agent mode internals) that
+`DEPLOYMENT_LAPTOP.md` builds on. Production on Railway is unaffected either way.
 
 Quick checklist:
 
