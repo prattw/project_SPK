@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Project SPK — USACE Policies and Publications AI Assistant</title>
+  <title>{{APP_NAME}} — USACE Policies and Publications AI Assistant</title>
+  {{APP_ICON_TAG}}
   <link rel="stylesheet" href="/static/style.css?v=0.9.4" />
 </head>
 <body>
@@ -33,7 +34,7 @@
   <header class="topbar">
     <div class="brand">
       <img class="logo" src="/static/img/sac-district-seal.png" alt="USACE Sacramento District seal" />
-      <span class="brand-title">Project SPK &mdash; USACE Policies and Publications AI Assistant</span>
+      <span class="brand-title">{{APP_NAME}} &mdash; USACE Policies and Publications AI Assistant</span>
       <span class="badge" id="versionBadge">BETA</span>
     </div>
     <div class="topbar-right">
@@ -88,8 +89,8 @@
         <div class="chat-scroll" id="chatScroll">
           <!-- Welcome screen (hidden once a conversation starts) -->
           <div id="welcome" class="welcome">
-            <img class="welcome-logo" src="/static/img/usace-sac-logo.png" alt="US Army Corps of Engineers, Sacramento District" />
-            <h1 class="welcome-title">USACE Policies and Publications AI Agent</h1>
+            <img class="welcome-logo" src="{{WELCOME_LOGO}}" alt="{{WELCOME_TITLE}}" />
+            <h1 class="welcome-title">{{WELCOME_TITLE}}</h1>
             <p class="welcome-desc">
               Ask me about any USACE policies and publications including all
               Engineer Regulations (ER), Engineer Manuals (EM), Engineering
@@ -2042,8 +2043,8 @@
   <div id="aboutModal" class="overlay" hidden>
     <div class="modal">
       <button type="button" class="modal-close" data-close>&times;</button>
-      <h2>About Project SPK</h2>
-      <p>Project SPK is a retrieval-augmented AI assistant for USACE construction documents. Upload PDFs, schedules, models, and office documents, then ask questions grounded in your library.</p>
+      <h2>About {{APP_NAME}}</h2>
+      <p>{{APP_NAME}} is a retrieval-augmented AI assistant for USACE construction documents. Upload PDFs, schedules, models, and office documents, then ask questions grounded in your library.</p>
       <h3>Official USACE libraries</h3>
       <ul>
         <li><a href="https://www.publications.usace.army.mil/" target="_blank" rel="noopener">USACE Publications</a> &mdash; ERs, EMs, EPs, ECs</li>

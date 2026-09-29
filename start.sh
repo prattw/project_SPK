@@ -15,8 +15,16 @@ fi
 
 echo "Starting server at http://127.0.0.1:8000"
 echo "Keep this Terminal window open while you use the app."
-# Exclude upload/index paths from --reload so saving a file does not restart mid-upload.
+# Exclude upload/index paths from --reload so saving a file does not restart
+# mid-upload. Covers both production's data/chroma_db and the local
+# prototype's data_local/chroma_db_local (see .env.local.example) — a write
+# to either during normal use (e.g. usage.db on every login/request) used to
+# trigger a reload and drop in-flight requests with a spurious 404.
 exec .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 \
   --reload-exclude 'data/*' \
+  --reload-exclude 'data_local/*' \
   --reload-exclude 'chroma_db/*' \
-  --reload-exclude 'auth.db'
+  --reload-exclude 'chroma_db_local/*' \
+  --reload-exclude 'auth.db' \
+  --reload-exclude '*.db' \
+  --reload-exclude '*.sqlite3'

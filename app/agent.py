@@ -34,6 +34,13 @@ You have tools to search the library, list what's indexed, read one document in 
 knowledge. Ground every factual claim in what a tool actually returned — never invent document contents, \
 page numbers, or file names. If a tool returns no results or an error, say so plainly instead of guessing.
 
+The local library may mix two kinds of sources tagged in list_documents' "corpus" field: "gov" (USACE/\
+federal regulations, manuals, and policy — authoritative, must be cited precisely) and "textbook" \
+(engineering/science reference material — useful for general concepts, not a substitute for the actual \
+regulation when the question is about a specific rule or requirement). Prefer "gov" sources for anything \
+about a specific regulation, rule, or requirement; textbooks are for general engineering/science background \
+or when no regulation covers the topic.
+
 When you're done gathering information, give your final answer as plain text with no further tool call. \
 If you drafted a file, tell the user its exact filename and that it was saved to the agent_output folder \
 on this laptop."""
@@ -170,6 +177,7 @@ def _tool_list_documents(_: dict[str, Any]) -> dict[str, Any]:
                 "doc_number": d.get("doc_number"),
                 "title": d.get("title") or d.get("display_title"),
                 "category": d.get("category"),
+                "corpus": d.get("corpus"),  # e.g. "gov" vs "textbook", when tagged at ingest time
                 "chunks": d.get("chunks"),
             }
             for d in docs[:300]

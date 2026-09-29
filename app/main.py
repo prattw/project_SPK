@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -273,9 +273,22 @@ if STATIC_DIR.exists():
 @app.get("/")
 def chat_ui():
     index = STATIC_DIR / "index.html"
-    if index.exists():
-        return FileResponse(index, media_type="text/html")
-    return {"message": "UI not found. API is running — see /docs"}
+    if not index.exists():
+        return {"message": "UI not found. API is running — see /docs"}
+    html = index.read_text(encoding="utf-8")
+    icon_tag = (
+        f'<link rel="icon" type="image/png" href="{settings.app_icon_path}" />'
+        if settings.app_icon_path
+        else ""
+    )
+    welcome_logo = settings.app_icon_path or "/static/img/usace-sac-logo.png"
+    html = (
+        html.replace("{{APP_NAME}}", settings.app_display_name)
+        .replace("{{APP_ICON_TAG}}", icon_tag)
+        .replace("{{WELCOME_LOGO}}", welcome_logo)
+        .replace("{{WELCOME_TITLE}}", settings.app_welcome_title)
+    )
+    return HTMLResponse(html)
 
 
 class LoginRequest(BaseModel):

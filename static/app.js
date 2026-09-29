@@ -1599,12 +1599,29 @@ loginForm.addEventListener("submit", async (e) => {
   }
 });
 
-// First screen: require a valid, unexpired sign-in token (24-hour sessions).
-if (authToken()) {
-  enterApp();
-} else {
+// First screen: require a valid, unexpired sign-in token (24-hour sessions) —
+// unless the server has sign-in disabled entirely (ACCESS_ROSTER and
+// APP_API_KEY both empty, as on the local prototype), in which case /login
+// always 404s by design and we should skip the gate and go straight in.
+async function decideInitialScreen() {
+  if (authToken()) {
+    enterApp();
+    return;
+  }
+  try {
+    const res = await fetch("/health");
+    const data = await res.json();
+    if (res.ok && data.auth_required === false) {
+      enterApp();
+      return;
+    }
+  } catch {
+    // Unreachable server — fall through to the normal sign-in screen, same
+    // as today, rather than guessing at whether auth would be required.
+  }
   clearAuthToken();
   loginScreen.hidden = false;
   updateLoginButton();
   loginEmail.focus();
 }
+decideInitialScreen();

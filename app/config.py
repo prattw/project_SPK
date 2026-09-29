@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     voyage_embedding_model: str = "voyage-3"
 
+    # Display name/icon shown in the UI (browser tab, header, About panel).
+    # Defaults preserve production branding; the local prototype's .env
+    # overrides these to rebrand just that instance — see LOCAL_PROTOTYPE.md.
+    app_display_name: str = "Project SPK"
+    app_icon_path: str = ""  # e.g. /static/img/moli-beans-icon.png; empty = no favicon, USACE logo on welcome screen
+    app_welcome_title: str = "USACE Policies and Publications AI Agent"
+
     host: str = "0.0.0.0"
     port: int = 8000
     app_api_key: str = ""

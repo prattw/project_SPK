@@ -2,18 +2,26 @@
 
 Usage:
     python scripts/bulk_ingest.py "DOCUMENTS for RAG"
+    python scripts/bulk_ingest.py "/mnt/c/Users/CYRUS/Documents/Master Library" --corpus gov
+    python scripts/bulk_ingest.py "/mnt/c/Users/CYRUS/Documents/Textbooks" --corpus textbook
 
 - Walks the folder recursively and ingests every supported file.
 - Skips files whose name is already in the index, so it is safe to re-run
   after an interruption.
 - Skips duplicate filenames within the run (first one wins).
 - Logs one line per file so progress is visible in the terminal.
+- Optional --corpus tags every chunk from this run with a "corpus" field
+  (e.g. "gov" vs "textbook") so multiple source collections stay
+  distinguishable in the Document Library even though they share one
+  vector index. Purely a label — retrieval still searches everything
+  together; nothing is filtered by it today.
 
 Stop the local API server before running this: ChromaDB does not support
 two processes writing to the same persistent store.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import time
@@ -42,15 +50,25 @@ def acquire_lock() -> bool:
     return True
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("folder", type=Path, help="Folder to walk and ingest recursively.")
+    parser.add_argument(
+        "--corpus",
+        default="",
+        help='Optional label stored on every chunk from this run (e.g. "gov", "textbook"). '
+        "Purely informational — shows up in the Document Library, does not affect retrieval.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
-    if len(sys.argv) < 2:
-        print(__doc__)
-        return 1
+    args = parse_args()
 
     if not acquire_lock():
         return 1
 
-    root = Path(sys.argv[1]).expanduser().resolve()
+    root = args.folder.expanduser().resolve()
     if not root.is_dir():
         print(f"Not a directory: {root}")
         return 1
@@ -60,10 +78,14 @@ def main() -> int:
         print("No supported files found.")
         return 1
 
+    extra_meta = {"corpus": args.corpus} if args.corpus else None
+
     rag = get_rag()
     already_indexed = set(rag.list_sources())
     print(f"Found {len(paths):,} supported files. "
           f"{len(already_indexed):,} sources already in the index.")
+    if args.corpus:
+        print(f"Tagging every indexed chunk from this run with corpus={args.corpus!r}.")
 
     seen_names: set[str] = set()
     done = skipped = failed = total_chunks = 0
@@ -85,7 +107,7 @@ def main() -> int:
 
         t0 = time.time()
         try:
-            result = ingest_path(path)
+            result = ingest_path(path, extra_meta=extra_meta)
             chunks = int(result.get("chunks_indexed", 0))
             total_chunks += chunks
             done += 1

@@ -1,5 +1,12 @@
 # Project SPK — Personal Local Prototype (Lenovo laptop)
 
+> See **[DEPLOYMENT_LAPTOP.md](DEPLOYMENT_LAPTOP.md)** for the current
+> architecture (two RAG corpora + one open-source model for both regulatory
+> answers and coding), the Deployment Laptop code-location convention, and
+> model-choice guidance. This doc has the detailed step-by-step mechanics
+> (WSL2, desktop icon, model swapping, agent mode, offline behavior) that
+> doc builds on.
+
 Purpose: give you a working sandbox to test the self-hosted architecture
 (local model instead of the OpenAI API) on your own Lenovo laptop, in the
 run-up to buying an RTX 5090 or RTX PRO 6000 Blackwell workstation. This is
@@ -41,7 +48,7 @@ servers. No app code changes — just a different `.env`.
 
 | | Laptop, CPU-only | Laptop with a small GPU (e.g. 8GB RTX 5050/4060) | Eventual RTX 5090 / PRO 6000 box |
 |---|---|---|---|
-| Model size | 3B | 7B–8B, fully in VRAM | 14B–70B+ class |
+| Model size | 3B | 8B, fully in VRAM | 14B–70B+ class |
 | Context budget | Kept modest (`MAX_CONTEXT_CHARS=40000`) | Modest, but the model itself answers faster | Expanded (60k–100k+ tokens) as planned |
 | Speed | Slow | Meaningfully faster — real CUDA acceleration, same code path as the production box | Fast — that's the whole point of the GPU purchase |
 | Purpose | De-risk the software setup | De-risk the setup *and* get a legitimate (if small-scale) preview of GPU-accelerated serving | Production-grade self-hosted serving for the team |
@@ -69,7 +76,7 @@ a Python virtualenv, installs dependencies, and writes `.env` from
 Force a specific model instead of auto-detection:
 
 ```bash
-./scripts/setup_local_prototype.sh --model qwen2.5:14b-instruct
+./scripts/setup_local_prototype.sh --model qwen3:14b
 ```
 
 ### Running Windows instead of Linux? Use WSL2
@@ -121,7 +128,7 @@ git checkout cursor/laptop-local-prototype-a548   # this branch, until merged
 ./scripts/setup_local_prototype.sh
 ```
 
-The script's GPU-detection will pick a 7-8B model automatically if it sees
+The script's GPU-detection will pick an 8B model automatically if it sees
 an 8GB-class laptop GPU (e.g. an RTX 5050/4060) — that's the sweet spot: it
 fits fully in VRAM with room for a modest context window, rather than
 spilling to slow CPU offload the way a 14B model would on 8GB.
@@ -152,7 +159,7 @@ and `app/embeddings.py` just read whatever `OPENAI_MODEL` (and
 `OPENAI_EMBEDDING_MODEL`) says in `.env`. To try a different chat model:
 
 ```bash
-./scripts/switch_local_model.sh qwen2.5:14b-instruct
+./scripts/switch_local_model.sh qwen3:14b
 ```
 
 This pulls the model with Ollama if it isn't local yet, and updates
@@ -168,9 +175,10 @@ A couple of things to know when swapping:
   and re-ingest.
 - **Agent mode needs a tool-calling model.** If you turn on Agent mode (next
   section), the model must support OpenAI-style tool/function calling.
-  Qwen2.5, Llama 3.1+, and Mistral-Nemo all do; check
+  Qwen3, Llama 3.1+, and Mistral-Nemo all do; check
   [ollama.com/search?c=tools](https://ollama.com/search?c=tools) for the
-  current list before switching.
+  current list before switching — this is also the fastest way to tell
+  whether a newer model family than whatever's named here has shown up.
 
 ## Agent mode (experimental, tool-calling)
 
@@ -221,45 +229,87 @@ WSL2 backend for you in the background and opens the app in a chromeless
 browser window (no address bar or tabs), so it looks and feels like a
 standalone app rather than a browser tab.
 
+This laptop instance is branded **"Moli Beans"** — a rename local to this
+desktop shortcut and browser tab only. It's set via `APP_DISPLAY_NAME` and
+`APP_ICON_PATH` in `.env` (see `.env.local.example`); production on Railway
+doesn't set either, so it keeps showing "Project SPK" as before.
+
 Files live in `scripts/windows/` in this repo:
 
 | File | Purpose |
 |---|---|
-| `app-icon.ico` | The icon used for the shortcut |
-| `Start-ProjectSPK.ps1` | Starts the backend in WSL2 if needed, opens the app window |
-| `Stop-ProjectSPK.ps1` | Stops the backend inside WSL2 |
-| `Install-ProjectSPKShortcut.ps1` | One-time installer — creates the Desktop/Start Menu icon |
+| `app-icon.ico` | The icon used for the shortcut (Moli, the actual cat) |
+| `Start-MoliBeans.ps1` | Starts the backend in WSL2 if needed, opens the app window |
+| `Stop-MoliBeans.ps1` | Stops the backend inside WSL2 |
+| `Install-MoliBeansShortcut.ps1` | One-time installer — creates the Desktop/Start Menu icon |
+| `Remove-ShortcutArrow.ps1` | Optional: removes the little shortcut-arrow badge from all desktop icons |
+| `Restore-ShortcutArrow.ps1` | Undoes `Remove-ShortcutArrow.ps1` |
 
 **Install (run once):** open the repo folder in File Explorer — from the
-address bar, go to `\\wsl.localhost\Ubuntu\home\<you>\project_SPK\scripts\windows`
-(swap `<you>` for your WSL username) — then open a PowerShell window there
+address bar, go to `\\wsl.localhost\Ubuntu\home\<you>\Deployment-Laptop\scripts\windows`
+(swap `<you>` for your WSL username, and the folder name for wherever you
+actually cloned it) — then open a PowerShell window there
 (Shift+Right-click the folder background → "Open PowerShell window here")
 and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-ProjectSPKShortcut.ps1
+powershell -ExecutionPolicy Bypass -File .\Install-MoliBeansShortcut.ps1
 ```
 
-This copies the launcher and icon to `%LOCALAPPDATA%\ProjectSPK` (so the
+This copies the launcher and icon to `%LOCALAPPDATA%\MoliBeans` (so the
 shortcut doesn't depend on the WSL2 network path staying mounted) and
-creates a **"Project SPK"** icon on your Desktop and in the Start Menu.
+creates a **"Moli Beans"** icon on your Desktop and in the Start Menu.
 Windows always opens `.ps1` files in Notepad by default when
 double-clicked — that's expected; running it via the command above is the
 one-time exception, and it only affects this script's process, not your
 system's execution policy.
 
-**Use it:** double-click the "Project SPK" icon. First launch takes a few
+**Use it:** double-click the "Moli Beans" icon. First launch takes a few
 seconds while the backend starts inside WSL2 (subsequent launches are
 faster if it's already running). To pin it to the taskbar, right-click the
 Desktop icon and choose **Pin to taskbar**.
 
-**Stop it:** run `Stop-ProjectSPK.ps1` from `%LOCALAPPDATA%\ProjectSPK`, or
+**Stop it:** run `Stop-MoliBeans.ps1` from `%LOCALAPPDATA%\MoliBeans`, or
 just `wsl --shutdown` from PowerShell to stop everything running in WSL2.
+
+**One thing to double-check:** `Start-MoliBeans.ps1` (and `Stop-MoliBeans.ps1`)
+have `$ProjectDir`/`$WslUser` set to `~/Deployment-Laptop`/`cyrus`. If you
+cloned the repo somewhere else, or your WSL2 Linux username is different
+(check with `whoami` in the Ubuntu terminal), open those files and update
+those lines before installing the shortcut — otherwise the launcher won't
+find the app to start, or will start it under the wrong user's home
+directory (which looks like a missing `.venv` even though it isn't).
+
+**If double-clicking the icon seems to do nothing:** the shortcut runs the
+launcher with its window hidden, so on success you'd only ever see the app
+window appear — no console, nothing else. If it *fails* instead, there's
+nothing to see either by design, so check
+`%LOCALAPPDATA%\MoliBeans\moli-beans-launcher.log` (a plain text file,
+timestamped) for what happened, or a message box should have popped up
+explaining it. For live output instead of the log, run
+`%LOCALAPPDATA%\MoliBeans\Start-MoliBeans.ps1` directly from a normal
+PowerShell window.
 
 This is purely a Windows-side convenience layer — it doesn't change
 anything about the app itself, and macOS/Linux versions of "double-click
 to launch" would use the equivalent native mechanism (an `.app` bundle or
 a `.desktop` file) if you ever need one.
+
+**Removing the little shortcut-arrow badge (optional, cosmetic):** that
+arrow is a built-in Windows overlay drawn on *every* `.lnk` shortcut on
+the system — it's not a property of any single icon, so there's no way to
+remove it from just the Moli Beans icon while keeping it elsewhere. If you
+want it gone everywhere, run (from an elevated/Administrator PowerShell
+window):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Remove-ShortcutArrow.ps1
+```
+
+This swaps Explorer's shortcut-arrow overlay for a transparent icon; it
+doesn't change how shortcuts behave, only how they look. It's fully
+reversible with `Restore-ShortcutArrow.ps1` (same folder, also needs
+Administrator).
 
 ## Important: separate data, separate index
 
@@ -320,6 +370,12 @@ so you can watch progress or leave it running in the background for a large
 library. Supported file types: `.pdf .docx .xlsx .csv .pptx .txt .md .xml
 .xer .ifc`, plus common image/CAD formats stored for reference. Unsupported
 files are skipped, not treated as errors.
+
+Add `--corpus gov` (or `--corpus textbook` for a second reference-material
+folder) to tag every chunk from that run so the two source collections stay
+distinguishable later — see
+[DEPLOYMENT_LAPTOP.md](DEPLOYMENT_LAPTOP.md#setting-up-the-two-rag-corpora)
+for why. It's a label only; both corpora are still searched together.
 
 **4. Restart the app** once it finishes:
 

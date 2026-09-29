@@ -2,21 +2,21 @@
 # Swap the local prototype's chat model without re-running the full setup.
 #
 # Usage:
-#   ./scripts/switch_local_model.sh qwen2.5:14b-instruct
+#   ./scripts/switch_local_model.sh qwen3:14b
 #   ./scripts/switch_local_model.sh llama3.1:8b-instruct-q4_0
 #
 # Pulls the model with Ollama (if not already local) and updates OPENAI_MODEL
 # in .env. Restart the app (./start.sh) afterward to pick it up.
 #
 # Tip: models that support OpenAI-style tool calling are needed for Agent
-# mode (ENABLE_AGENT_MODE=true) — qwen2.5, llama3.1+, and mistral-nemo all
+# mode (ENABLE_AGENT_MODE=true) — qwen3, llama3.1+, and mistral-nemo all
 # support tools; check https://ollama.com/search?c=tools for the current list.
 
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <ollama-model-tag>" >&2
-  echo "Examples: qwen2.5:14b-instruct, qwen2.5:7b-instruct, llama3.1:8b-instruct-q4_0" >&2
+  echo "Examples: qwen3:14b, qwen3:8b, llama3.1:8b-instruct-q4_0" >&2
   exit 1
 fi
 
