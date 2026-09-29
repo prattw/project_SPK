@@ -9,7 +9,7 @@
   (Edge's "app mode") so it feels like a standalone desktop app rather than
   a browser tab.  Falls back to your default browser if Edge isn't found.
 
-  This does not touch production Project SPK (Railway/OpenAI) in any way —
+  This does not touch production Project SPK (Railway/OpenAI) in any way -
   it only starts the local prototype described in LOCAL_PROTOTYPE.md. The
   app is renamed "Moli Beans" for this laptop instance only (see
   APP_DISPLAY_NAME/APP_ICON_PATH in .env); production keeps the Project SPK
@@ -71,7 +71,7 @@ Write-Log "== Launch attempt starting =="
 
 try {
     if (-not (Test-AppHealthy)) {
-        Write-Log "Moli Beans isn't running yet — starting it inside WSL2 ($WslDistro)..."
+        Write-Log "Moli Beans isn't running yet - starting it inside WSL2 ($WslDistro)..."
 
         # Start the backend inside WSL2, backgrounded with nohup so it keeps
         # running after this wsl.exe invocation returns. Logs go to /tmp/spk.log
@@ -110,7 +110,7 @@ try {
         Write-Log "Opening in Edge app mode: $edge"
         Start-Process -FilePath $edge -ArgumentList @("--app=$AppUrl", "--window-size=1440,900")
     } else {
-        Write-Log "Edge not found at the usual paths — opening default browser instead."
+        Write-Log "Edge not found at the usual paths - opening default browser instead."
         Start-Process $AppUrl
     }
     Write-Log "== Launch attempt finished OK =="

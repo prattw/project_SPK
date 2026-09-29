@@ -13,7 +13,7 @@
   Both point at Start-MoliBeans.ps1, which starts the backend inside WSL2
   if needed and opens the app in a chromeless browser window.
 
-  This is a laptop-only rebrand of Project SPK's local prototype — the icon
+  This is a laptop-only rebrand of Project SPK's local prototype - the icon
   and name only affect this desktop shortcut and the browser tab it opens
   (via APP_DISPLAY_NAME/APP_ICON_PATH in .env). Production on Railway is
   untouched and keeps the Project SPK name.
