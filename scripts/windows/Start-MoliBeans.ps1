@@ -73,12 +73,35 @@ try {
     if (-not (Test-AppHealthy)) {
         Write-Log "Moli Beans isn't running yet - starting it inside WSL2 ($WslDistro)..."
 
-        # Start the backend inside WSL2, backgrounded with nohup so it keeps
-        # running after this wsl.exe invocation returns. Logs go to /tmp/spk.log
-        # inside the WSL filesystem for troubleshooting.
-        $startCmd = "cd $ProjectDir && source .venv/bin/activate && nohup ./start.sh > /tmp/spk.log 2>&1 & disown; sleep 1"
-        $proc = Start-Process -FilePath "wsl.exe" -ArgumentList @("-d", $WslDistro, "--", "bash", "-lc", $startCmd) -WindowStyle Hidden -Wait -PassThru
+        # Start the backend inside WSL2. The cd/source steps run in the
+        # foreground (with explicit || checks) so a failure there produces a
+        # real non-zero exit code and an error message we can capture, rather
+        # than being silently swallowed. Only the actual server process is
+        # backgrounded with nohup so it keeps running after this wsl.exe
+        # invocation returns. App logs go to /tmp/spk.log inside WSL.
+        $startCmd = "cd $ProjectDir || { echo 'ERROR: cd to project dir failed - check `$ProjectDir in Start-MoliBeans.ps1'; exit 10; }; source .venv/bin/activate || { echo 'ERROR: could not activate .venv - did setup_local_prototype.sh finish successfully?'; exit 11; }; nohup ./start.sh > /tmp/spk.log 2>&1 & disown; sleep 1"
+
+        $wslStdout = Join-Path $env:TEMP "moli-beans-wsl-stdout.log"
+        $wslStderr = Join-Path $env:TEMP "moli-beans-wsl-stderr.log"
+        Remove-Item -ErrorAction SilentlyContinue $wslStdout, $wslStderr
+
+        $proc = Start-Process -FilePath "wsl.exe" -ArgumentList @("-d", $WslDistro, "--", "bash", "-lc", $startCmd) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $wslStdout -RedirectStandardError $wslStderr
         Write-Log "wsl.exe exited with code $($proc.ExitCode)"
+
+        $wslOutput = ""
+        foreach ($f in @($wslStdout, $wslStderr)) {
+            if (Test-Path $f) {
+                $content = (Get-Content $f -Raw -ErrorAction SilentlyContinue)
+                if ($content) {
+                    Write-Log "wsl.exe output ($f):`n$content"
+                    $wslOutput += "$content`n"
+                }
+            }
+        }
+
+        if ($proc.ExitCode -ne 0) {
+            Show-FailureAndExit "Starting the backend inside WSL2 failed (exit code $($proc.ExitCode)).`n`n$wslOutput"
+        }
 
         $waited = 0
         while (-not (Test-AppHealthy) -and $waited -lt $MaxWaitSecs) {
@@ -87,7 +110,7 @@ try {
         }
 
         if (-not (Test-AppHealthy)) {
-            Show-FailureAndExit "Moli Beans did not become healthy within $MaxWaitSecs seconds (wsl.exe exit code: $($proc.ExitCode))."
+            Show-FailureAndExit "Moli Beans did not become healthy within $MaxWaitSecs seconds (wsl.exe exit code: $($proc.ExitCode)).`n`n$wslOutput"
         }
         Write-Log "Moli Beans is up after $waited second(s)."
     } else {
