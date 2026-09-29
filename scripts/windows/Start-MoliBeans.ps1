@@ -30,6 +30,14 @@
 $ErrorActionPreference = "Stop"
 
 $WslDistro   = "Ubuntu"
+# `wsl.exe -d <Distro> -- <cmd>` (no -u) is not guaranteed to log in as the
+# same user as double-clicking the "Ubuntu" app / your Windows Terminal
+# profile - it uses whatever default user is registered for the distro,
+# which can silently differ. Pinning -u here guarantees `~` always resolves
+# to the same home directory you used when you ran setup_local_prototype.sh.
+# Edit this if your WSL2 Linux username isn't "cyrus" (check with `whoami`
+# from inside the Ubuntu terminal).
+$WslUser     = "cyrus"
 # Edit this if you cloned the repo somewhere else inside WSL2 (check with
 # `pwd` from inside the Ubuntu terminal where you ran setup_local_prototype.sh).
 $ProjectDir  = "~/Deployment-Laptop"
@@ -50,7 +58,7 @@ function Show-FailureAndExit {
     Write-Log "FAILED: $Message"
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.MessageBox]::Show(
-        "$Message`n`nDetails logged to:`n$LogFile`n`nWSL-side app log (if it got that far):`nwsl.exe -d $WslDistro -- cat /tmp/spk.log",
+        "$Message`n`nDetails logged to:`n$LogFile`n`nWSL-side app log (if it got that far):`nwsl.exe -d $WslDistro -u $WslUser -- cat /tmp/spk.log",
         "Moli Beans didn't start",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Error
@@ -78,14 +86,24 @@ try {
         # real non-zero exit code and an error message we can capture, rather
         # than being silently swallowed. Only the actual server process is
         # backgrounded with nohup so it keeps running after this wsl.exe
-        # invocation returns. App logs go to /tmp/spk.log inside WSL.
-        $startCmd = "cd $ProjectDir || { echo 'ERROR: cd to project dir failed - check `$ProjectDir in Start-MoliBeans.ps1'; exit 10; }; source .venv/bin/activate || { echo 'ERROR: could not activate .venv - did setup_local_prototype.sh finish successfully?'; exit 11; }; nohup ./start.sh > /tmp/spk.log 2>&1 & disown; sleep 1"
+        # invocation returns. App logs go to /tmp/spk.log inside WSL. A DIAG
+        # line is always echoed first so a failure message shows exactly
+        # which user/home directory this ran under, in case -u/$WslUser or
+        # $ProjectDir ever need adjusting again.
+        $startCmd = @"
+echo "DIAG: whoami=`$(whoami) HOME=`$HOME"
+cd $ProjectDir || { echo 'ERROR: cd to project dir failed - check `$ProjectDir in Start-MoliBeans.ps1'; exit 10; }
+source .venv/bin/activate || { echo 'ERROR: could not activate .venv - did setup_local_prototype.sh finish successfully?'; echo "DIAG: pwd=`$(pwd)"; ls -la; exit 11; }
+nohup ./start.sh > /tmp/spk.log 2>&1 &
+disown
+sleep 1
+"@
 
         $wslStdout = Join-Path $env:TEMP "moli-beans-wsl-stdout.log"
         $wslStderr = Join-Path $env:TEMP "moli-beans-wsl-stderr.log"
         Remove-Item -ErrorAction SilentlyContinue $wslStdout, $wslStderr
 
-        $proc = Start-Process -FilePath "wsl.exe" -ArgumentList @("-d", $WslDistro, "--", "bash", "-lc", $startCmd) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $wslStdout -RedirectStandardError $wslStderr
+        $proc = Start-Process -FilePath "wsl.exe" -ArgumentList @("-d", $WslDistro, "-u", $WslUser, "--", "bash", "-lc", $startCmd) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $wslStdout -RedirectStandardError $wslStderr
         Write-Log "wsl.exe exited with code $($proc.ExitCode)"
 
         $wslOutput = ""
