@@ -242,6 +242,8 @@ Files live in `scripts/windows/` in this repo:
 | `Start-MoliBeans.ps1` | Starts the backend in WSL2 if needed, opens the app window |
 | `Stop-MoliBeans.ps1` | Stops the backend inside WSL2 |
 | `Install-MoliBeansShortcut.ps1` | One-time installer — creates the Desktop/Start Menu icon |
+| `Remove-ShortcutArrow.ps1` | Optional: removes the little shortcut-arrow badge from all desktop icons |
+| `Restore-ShortcutArrow.ps1` | Undoes `Remove-ShortcutArrow.ps1` |
 
 **Install (run once):** open the repo folder in File Explorer — from the
 address bar, go to `\\wsl.localhost\Ubuntu\home\<you>\Deployment-Laptop\scripts\windows`
@@ -270,11 +272,13 @@ Desktop icon and choose **Pin to taskbar**.
 **Stop it:** run `Stop-MoliBeans.ps1` from `%LOCALAPPDATA%\MoliBeans`, or
 just `wsl --shutdown` from PowerShell to stop everything running in WSL2.
 
-**One thing to double-check:** `Start-MoliBeans.ps1` has `$ProjectDir` set
-to `~/Deployment-Laptop` (wherever you cloned the repo inside WSL2 per this
-doc). If you cloned it somewhere else, open that file and update that one
-line before installing the shortcut — otherwise the launcher won't find the
-app to start.
+**One thing to double-check:** `Start-MoliBeans.ps1` (and `Stop-MoliBeans.ps1`)
+have `$ProjectDir`/`$WslUser` set to `~/Deployment-Laptop`/`cyrus`. If you
+cloned the repo somewhere else, or your WSL2 Linux username is different
+(check with `whoami` in the Ubuntu terminal), open those files and update
+those lines before installing the shortcut — otherwise the launcher won't
+find the app to start, or will start it under the wrong user's home
+directory (which looks like a missing `.venv` even though it isn't).
 
 **If double-clicking the icon seems to do nothing:** the shortcut runs the
 launcher with its window hidden, so on success you'd only ever see the app
@@ -290,6 +294,22 @@ This is purely a Windows-side convenience layer — it doesn't change
 anything about the app itself, and macOS/Linux versions of "double-click
 to launch" would use the equivalent native mechanism (an `.app` bundle or
 a `.desktop` file) if you ever need one.
+
+**Removing the little shortcut-arrow badge (optional, cosmetic):** that
+arrow is a built-in Windows overlay drawn on *every* `.lnk` shortcut on
+the system — it's not a property of any single icon, so there's no way to
+remove it from just the Moli Beans icon while keeping it elsewhere. If you
+want it gone everywhere, run (from an elevated/Administrator PowerShell
+window):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Remove-ShortcutArrow.ps1
+```
+
+This swaps Explorer's shortcut-arrow overlay for a transparent icon; it
+doesn't change how shortcuts behave, only how they look. It's fully
+reversible with `Restore-ShortcutArrow.ps1` (same folder, also needs
+Administrator).
 
 ## Important: separate data, separate index
 
