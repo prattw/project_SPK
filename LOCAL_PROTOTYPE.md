@@ -229,40 +229,52 @@ WSL2 backend for you in the background and opens the app in a chromeless
 browser window (no address bar or tabs), so it looks and feels like a
 standalone app rather than a browser tab.
 
+This laptop instance is branded **"Moli Beans"** — a rename local to this
+desktop shortcut and browser tab only. It's set via `APP_DISPLAY_NAME` and
+`APP_ICON_PATH` in `.env` (see `.env.local.example`); production on Railway
+doesn't set either, so it keeps showing "Project SPK" as before.
+
 Files live in `scripts/windows/` in this repo:
 
 | File | Purpose |
 |---|---|
-| `app-icon.ico` | The icon used for the shortcut |
-| `Start-ProjectSPK.ps1` | Starts the backend in WSL2 if needed, opens the app window |
-| `Stop-ProjectSPK.ps1` | Stops the backend inside WSL2 |
-| `Install-ProjectSPKShortcut.ps1` | One-time installer — creates the Desktop/Start Menu icon |
+| `app-icon.ico` | The icon used for the shortcut (Moli, the actual cat) |
+| `Start-MoliBeans.ps1` | Starts the backend in WSL2 if needed, opens the app window |
+| `Stop-MoliBeans.ps1` | Stops the backend inside WSL2 |
+| `Install-MoliBeansShortcut.ps1` | One-time installer — creates the Desktop/Start Menu icon |
 
 **Install (run once):** open the repo folder in File Explorer — from the
-address bar, go to `\\wsl.localhost\Ubuntu\home\<you>\project_SPK\scripts\windows`
-(swap `<you>` for your WSL username) — then open a PowerShell window there
+address bar, go to `\\wsl.localhost\Ubuntu\home\<you>\Deployment-Laptop\scripts\windows`
+(swap `<you>` for your WSL username, and the folder name for wherever you
+actually cloned it) — then open a PowerShell window there
 (Shift+Right-click the folder background → "Open PowerShell window here")
 and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-ProjectSPKShortcut.ps1
+powershell -ExecutionPolicy Bypass -File .\Install-MoliBeansShortcut.ps1
 ```
 
-This copies the launcher and icon to `%LOCALAPPDATA%\ProjectSPK` (so the
+This copies the launcher and icon to `%LOCALAPPDATA%\MoliBeans` (so the
 shortcut doesn't depend on the WSL2 network path staying mounted) and
-creates a **"Project SPK"** icon on your Desktop and in the Start Menu.
+creates a **"Moli Beans"** icon on your Desktop and in the Start Menu.
 Windows always opens `.ps1` files in Notepad by default when
 double-clicked — that's expected; running it via the command above is the
 one-time exception, and it only affects this script's process, not your
 system's execution policy.
 
-**Use it:** double-click the "Project SPK" icon. First launch takes a few
+**Use it:** double-click the "Moli Beans" icon. First launch takes a few
 seconds while the backend starts inside WSL2 (subsequent launches are
 faster if it's already running). To pin it to the taskbar, right-click the
 Desktop icon and choose **Pin to taskbar**.
 
-**Stop it:** run `Stop-ProjectSPK.ps1` from `%LOCALAPPDATA%\ProjectSPK`, or
+**Stop it:** run `Stop-MoliBeans.ps1` from `%LOCALAPPDATA%\MoliBeans`, or
 just `wsl --shutdown` from PowerShell to stop everything running in WSL2.
+
+**One thing to double-check:** `Start-MoliBeans.ps1` has `$ProjectDir` set
+to `~/Deployment-Laptop` (wherever you cloned the repo inside WSL2 per this
+doc). If you cloned it somewhere else, open that file and update that one
+line before installing the shortcut — otherwise the launcher won't find the
+app to start.
 
 This is purely a Windows-side convenience layer — it doesn't change
 anything about the app itself, and macOS/Linux versions of "double-click

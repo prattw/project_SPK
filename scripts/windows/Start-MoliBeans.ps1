@@ -1,25 +1,31 @@
 <#
 .SYNOPSIS
-  Launches Project SPK (local prototype) and opens it in an app-like window.
+  Launches Moli Beans (Project SPK's local prototype) and opens it in an
+  app-like window.
 
 .DESCRIPTION
   Starts the FastAPI backend inside WSL2 if it isn't already running, waits
   for it to become healthy, then opens it in a chromeless browser window
   (Edge's "app mode") so it feels like a standalone desktop app rather than
-  a browser tab. Falls back to your default browser if Edge isn't found.
+  a browser tab.  Falls back to your default browser if Edge isn't found.
 
   This does not touch production Project SPK (Railway/OpenAI) in any way —
-  it only starts the local prototype described in LOCAL_PROTOTYPE.md.
+  it only starts the local prototype described in LOCAL_PROTOTYPE.md. The
+  app is renamed "Moli Beans" for this laptop instance only (see
+  APP_DISPLAY_NAME/APP_ICON_PATH in .env); production keeps the Project SPK
+  name and branding.
 
 .NOTES
   This script is meant to be launched via the desktop shortcut created by
-  Install-ProjectSPKShortcut.ps1. You can also run it directly.
+  Install-MoliBeansShortcut.ps1. You can also run it directly.
 #>
 
 $ErrorActionPreference = "Stop"
 
 $WslDistro   = "Ubuntu"
-$ProjectDir  = "~/project_SPK"
+# Edit this if you cloned the repo somewhere else inside WSL2 (check with
+# `pwd` from inside the Ubuntu terminal where you ran setup_local_prototype.sh).
+$ProjectDir  = "~/Deployment-Laptop"
 $AppUrl      = "http://127.0.0.1:8000"
 $HealthUrl   = "$AppUrl/health"
 $MaxWaitSecs = 45
@@ -34,7 +40,7 @@ function Test-AppHealthy {
 }
 
 if (-not (Test-AppHealthy)) {
-    Write-Host "Project SPK isn't running yet — starting it inside WSL2 ($WslDistro)..."
+    Write-Host "Moli Beans isn't running yet — starting it inside WSL2 ($WslDistro)..."
 
     # Start the backend inside WSL2, backgrounded with nohup so it keeps
     # running after this wsl.exe invocation returns. Logs go to /tmp/spk.log
@@ -49,14 +55,14 @@ if (-not (Test-AppHealthy)) {
     }
 
     if (-not (Test-AppHealthy)) {
-        Write-Warning "Project SPK did not become healthy within $MaxWaitSecs seconds."
+        Write-Warning "Moli Beans did not become healthy within $MaxWaitSecs seconds."
         Write-Warning "Check the log inside WSL2: wsl.exe -d $WslDistro -- cat /tmp/spk.log"
         Read-Host "Press Enter to close"
         exit 1
     }
-    Write-Host "Project SPK is up."
+    Write-Host "Moli Beans is up."
 } else {
-    Write-Host "Project SPK is already running."
+    Write-Host "Moli Beans is already running."
 }
 
 # Open in an app-like (chromeless) window if Edge is available, else fall
