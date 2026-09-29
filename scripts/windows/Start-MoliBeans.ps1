@@ -15,9 +15,16 @@
   APP_DISPLAY_NAME/APP_ICON_PATH in .env); production keeps the Project SPK
   name and branding.
 
+  The desktop shortcut launches this with a hidden window, so anything
+  printed with Write-Host/Write-Warning is invisible in normal use. Every
+  step is also logged to moli-beans-launcher.log next to this script, and
+  failures pop up a message box (rather than a hidden, silently-hanging
+  Read-Host prompt) so a problem is never just "nothing happened."
+
 .NOTES
   This script is meant to be launched via the desktop shortcut created by
-  Install-MoliBeansShortcut.ps1. You can also run it directly.
+  Install-MoliBeansShortcut.ps1. You can also run it directly (e.g. from a
+  normal PowerShell window) to see everything live instead of via the log.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -29,6 +36,27 @@ $ProjectDir  = "~/Deployment-Laptop"
 $AppUrl      = "http://127.0.0.1:8000"
 $HealthUrl   = "$AppUrl/health"
 $MaxWaitSecs = 45
+$LogFile     = Join-Path $PSScriptRoot "moli-beans-launcher.log"
+
+function Write-Log {
+    param([string]$Message)
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $Message"
+    Add-Content -Path $LogFile -Value $line
+    Write-Host $Message
+}
+
+function Show-FailureAndExit {
+    param([string]$Message)
+    Write-Log "FAILED: $Message"
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        "$Message`n`nDetails logged to:`n$LogFile`n`nWSL-side app log (if it got that far):`nwsl.exe -d $WslDistro -- cat /tmp/spk.log",
+        "Moli Beans didn't start",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    ) | Out-Null
+    exit 1
+}
 
 function Test-AppHealthy {
     try {
@@ -39,42 +67,53 @@ function Test-AppHealthy {
     }
 }
 
-if (-not (Test-AppHealthy)) {
-    Write-Host "Moli Beans isn't running yet — starting it inside WSL2 ($WslDistro)..."
+Write-Log "== Launch attempt starting =="
 
-    # Start the backend inside WSL2, backgrounded with nohup so it keeps
-    # running after this wsl.exe invocation returns. Logs go to /tmp/spk.log
-    # inside the WSL filesystem for troubleshooting.
-    $startCmd = "cd $ProjectDir && source .venv/bin/activate && nohup ./start.sh > /tmp/spk.log 2>&1 & disown; sleep 1"
-    Start-Process -FilePath "wsl.exe" -ArgumentList @("-d", $WslDistro, "--", "bash", "-lc", $startCmd) -WindowStyle Hidden -Wait
-
-    $waited = 0
-    while (-not (Test-AppHealthy) -and $waited -lt $MaxWaitSecs) {
-        Start-Sleep -Seconds 1
-        $waited++
-    }
-
+try {
     if (-not (Test-AppHealthy)) {
-        Write-Warning "Moli Beans did not become healthy within $MaxWaitSecs seconds."
-        Write-Warning "Check the log inside WSL2: wsl.exe -d $WslDistro -- cat /tmp/spk.log"
-        Read-Host "Press Enter to close"
-        exit 1
+        Write-Log "Moli Beans isn't running yet — starting it inside WSL2 ($WslDistro)..."
+
+        # Start the backend inside WSL2, backgrounded with nohup so it keeps
+        # running after this wsl.exe invocation returns. Logs go to /tmp/spk.log
+        # inside the WSL filesystem for troubleshooting.
+        $startCmd = "cd $ProjectDir && source .venv/bin/activate && nohup ./start.sh > /tmp/spk.log 2>&1 & disown; sleep 1"
+        $proc = Start-Process -FilePath "wsl.exe" -ArgumentList @("-d", $WslDistro, "--", "bash", "-lc", $startCmd) -WindowStyle Hidden -Wait -PassThru
+        Write-Log "wsl.exe exited with code $($proc.ExitCode)"
+
+        $waited = 0
+        while (-not (Test-AppHealthy) -and $waited -lt $MaxWaitSecs) {
+            Start-Sleep -Seconds 1
+            $waited++
+        }
+
+        if (-not (Test-AppHealthy)) {
+            Show-FailureAndExit "Moli Beans did not become healthy within $MaxWaitSecs seconds (wsl.exe exit code: $($proc.ExitCode))."
+        }
+        Write-Log "Moli Beans is up after $waited second(s)."
+    } else {
+        Write-Log "Moli Beans is already running."
     }
-    Write-Host "Moli Beans is up."
-} else {
-    Write-Host "Moli Beans is already running."
+} catch {
+    Show-FailureAndExit "Error while starting the backend: $($_.Exception.Message)"
 }
 
 # Open in an app-like (chromeless) window if Edge is available, else fall
 # back to whatever the default browser is.
-$edgePaths = @(
-    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
-    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
-)
-$edge = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+try {
+    $edgePaths = @(
+        "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+    )
+    $edge = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-if ($edge) {
-    Start-Process -FilePath $edge -ArgumentList @("--app=$AppUrl", "--window-size=1440,900")
-} else {
-    Start-Process $AppUrl
+    if ($edge) {
+        Write-Log "Opening in Edge app mode: $edge"
+        Start-Process -FilePath $edge -ArgumentList @("--app=$AppUrl", "--window-size=1440,900")
+    } else {
+        Write-Log "Edge not found at the usual paths — opening default browser instead."
+        Start-Process $AppUrl
+    }
+    Write-Log "== Launch attempt finished OK =="
+} catch {
+    Show-FailureAndExit "Backend is healthy, but couldn't open a browser window: $($_.Exception.Message)"
 }

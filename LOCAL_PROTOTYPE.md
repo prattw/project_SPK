@@ -276,6 +276,16 @@ doc). If you cloned it somewhere else, open that file and update that one
 line before installing the shortcut — otherwise the launcher won't find the
 app to start.
 
+**If double-clicking the icon seems to do nothing:** the shortcut runs the
+launcher with its window hidden, so on success you'd only ever see the app
+window appear — no console, nothing else. If it *fails* instead, there's
+nothing to see either by design, so check
+`%LOCALAPPDATA%\MoliBeans\moli-beans-launcher.log` (a plain text file,
+timestamped) for what happened, or a message box should have popped up
+explaining it. For live output instead of the log, run
+`%LOCALAPPDATA%\MoliBeans\Start-MoliBeans.ps1` directly from a normal
+PowerShell window.
+
 This is purely a Windows-side convenience layer — it doesn't change
 anything about the app itself, and macOS/Linux versions of "double-click
 to launch" would use the equivalent native mechanism (an `.app` bundle or
