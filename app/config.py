@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     # Defaults preserve production branding; the local prototype's .env
     # overrides these to rebrand just that instance — see LOCAL_PROTOTYPE.md.
     app_display_name: str = "Project SPK"
-    app_icon_path: str = ""  # e.g. /static/img/moli-beans-icon.png; empty = no favicon
+    app_icon_path: str = ""  # e.g. /static/img/moli-beans-icon.png; empty = no favicon, USACE logo on welcome screen
+    app_welcome_title: str = "USACE Policies and Publications AI Agent"
 
     host: str = "0.0.0.0"
     port: int = 8000

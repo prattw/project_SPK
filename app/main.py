@@ -281,8 +281,12 @@ def chat_ui():
         if settings.app_icon_path
         else ""
     )
-    html = html.replace("{{APP_NAME}}", settings.app_display_name).replace(
-        "{{APP_ICON_TAG}}", icon_tag
+    welcome_logo = settings.app_icon_path or "/static/img/usace-sac-logo.png"
+    html = (
+        html.replace("{{APP_NAME}}", settings.app_display_name)
+        .replace("{{APP_ICON_TAG}}", icon_tag)
+        .replace("{{WELCOME_LOGO}}", welcome_logo)
+        .replace("{{WELCOME_TITLE}}", settings.app_welcome_title)
     )
     return HTMLResponse(html)
 
