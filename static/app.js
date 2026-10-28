@@ -17,6 +17,8 @@ const configStatus = document.getElementById("configStatus");
 const versionBadge = document.getElementById("versionBadge");
 const agentToggleWrap = document.getElementById("agentToggleWrap");
 const agentToggle = document.getElementById("agentToggle");
+const codingAgentToggleWrap = document.getElementById("codingAgentToggleWrap");
+const codingAgentToggle = document.getElementById("codingAgentToggle");
 const sessionListEl = document.getElementById("sessionList");
 const sessionSearch = document.getElementById("sessionSearch");
 const newChatBtn = document.getElementById("newChatBtn");
@@ -64,10 +66,14 @@ function requireSignIn() {
   loginEmail.focus();
 }
 
+function isDownloadLinkUrl(url) {
+  return typeof url === "string" && (url.startsWith("/download/") || url.startsWith("/agent/code/files/"));
+}
+
 function withToken(url) {
   // Plain <a href> downloads can't send headers — pass the token in the query.
   const token = authToken();
-  if (!token || typeof url !== "string" || !url.startsWith("/download/")) return url;
+  if (!token || !isDownloadLinkUrl(url)) return url;
   return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
 }
 
@@ -176,7 +182,9 @@ function openSession(id) {
   messagesEl.innerHTML = "";
   clearUploadChips();
   welcomeEl.hidden = s.messages.length > 0;
-  s.messages.forEach((m) => renderMessage(m.role, m.text, m.sources || [], m.citations || [], m.steps || []));
+  s.messages.forEach((m) =>
+    renderMessage(m.role, m.text, m.sources || [], m.citations || [], m.steps || [], m.files || [], m.jobId || null)
+  );
   showView("chat");
   renderSessionList();
   chatScroll.scrollTop = chatScroll.scrollHeight;
@@ -538,6 +546,10 @@ const AGENT_TOOL_LABELS = {
   list_documents: "Listed indexed documents",
   read_document: "Read a document",
   draft_docx_report: "Drafted a report",
+  write_file: "Wrote a file",
+  read_file: "Read a file back",
+  list_files: "Listed workspace files",
+  run_command: "Ran a command",
 };
 
 function renderAgentSteps(steps) {
@@ -558,7 +570,33 @@ function renderAgentSteps(steps) {
   return wrap;
 }
 
-function renderMessage(role, text, sources = [], citations = [], steps = []) {
+function formatFileBytes(n) {
+  if (!n || n < 1024) return `${n || 0} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAgentFiles(files, jobId) {
+  const wrap = document.createElement("div");
+  wrap.className = "agent-files";
+  const label = document.createElement("div");
+  label.className = "agent-files-label";
+  label.textContent = files.length === 1 ? "Generated file" : `Generated files (${files.length})`;
+  wrap.appendChild(label);
+  for (const f of files) {
+    const encodedPath = f.path.split("/").map(encodeURIComponent).join("/");
+    const url = `/agent/code/files/${encodeURIComponent(jobId)}/${encodedPath}`;
+    const a = document.createElement("a");
+    a.className = "agent-file-chip";
+    a.href = withToken(url);
+    a.download = f.path.split("/").pop() || f.path;
+    a.textContent = `${f.path} (${formatFileBytes(f.bytes)})`;
+    wrap.appendChild(a);
+  }
+  return wrap;
+}
+
+function renderMessage(role, text, sources = [], citations = [], steps = [], files = [], jobId = null) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   if (role === "file") {
@@ -576,8 +614,9 @@ function renderMessage(role, text, sources = [], citations = [], steps = []) {
     if (steps?.length) div.appendChild(renderAgentSteps(steps));
     const md = document.createElement("div");
     md.className = "md";
-    md.innerHTML = renderMarkdown(text);
+    renderRichMarkdownInto(md, text);
     div.appendChild(md);
+    if (files?.length && jobId) div.appendChild(renderAgentFiles(files, jobId));
   } else {
     const p = document.createElement("p");
     p.textContent = text;
@@ -624,13 +663,13 @@ function reportClientError(message, context) {
   }
 }
 
-function addMessage(role, text, sources = [], citations = [], steps = []) {
+function addMessage(role, text, sources = [], citations = [], steps = [], files = [], jobId = null) {
   welcomeEl.hidden = true;
-  renderMessage(role, text, sources, citations, steps);
+  renderMessage(role, text, sources, citations, steps, files, jobId);
   if (role === "error") reportClientError(text, "chat");
 
   const s = ensureSession();
-  s.messages.push({ role, text, sources, citations, steps });
+  s.messages.push({ role, text, sources, citations, steps, files, jobId });
   if (role === "user" && s.title === "New conversation") {
     s.title = text.length > 60 ? text.slice(0, 57) + "..." : text;
   }
@@ -918,6 +957,7 @@ async function loadLimits() {
     updateConfigStatus(data);
     if (data.version) versionBadge.textContent = `BETA v${data.version}`;
     if (agentToggleWrap) agentToggleWrap.hidden = !data.agent_enabled;
+    if (codingAgentToggleWrap) codingAgentToggleWrap.hidden = !data.coding_agent_enabled;
 
     const L = data.context_limits;
     const ctxK = Math.round(L.max_context_chars / 1000);
@@ -937,7 +977,7 @@ async function loadLimits() {
 /* ---------- Files / indexing ---------- */
 
 function isLocalDownloadUrl(url) {
-  return typeof url === "string" && url.startsWith("/download/");
+  return isDownloadLinkUrl(url);
 }
 
 function documentLinkAttrs(url) {
@@ -1210,7 +1250,13 @@ async function pollAgentJob(jobId, onProgress) {
       continue;
     }
     if (job.status === "done" && job.agent_result) {
-      return { ok: true, data: job.agent_result, elapsed_ms: job.elapsed_ms };
+      return {
+        ok: true,
+        data: job.agent_result,
+        files: job.agent_files || [],
+        jobId: job.job_id,
+        elapsed_ms: job.elapsed_ms,
+      };
     }
     return { ok: false, message: job.message || "Agent run failed." };
   }
@@ -1418,6 +1464,14 @@ viewChat.addEventListener("drop", (e) => {
   handleFiles(e.dataTransfer.files);
 });
 
+// Only one agent mode can drive a given message — picking one turns the other off.
+agentToggle?.addEventListener("change", () => {
+  if (agentToggle.checked && codingAgentToggle) codingAgentToggle.checked = false;
+});
+codingAgentToggle?.addEventListener("change", () => {
+  if (codingAgentToggle.checked && agentToggle) agentToggle.checked = false;
+});
+
 // Stop Finder from pasting a file path into the question box when dropped on the textarea.
 questionEl.addEventListener("dragover", (e) => {
   if (hasFileDrag(e.dataTransfer)) e.preventDefault();
@@ -1482,6 +1536,56 @@ async function askAgent(question, s, history) {
   }
 }
 
+async function askCodingAgent(question, s, history) {
+  const payload = { question };
+  if (s?.id) payload.session_id = s.id;
+  if (history?.length) payload.history = history.slice(0, -1);
+
+  try {
+    const res = await apiFetch("/agent/code/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    let data;
+    try {
+      data = await readJsonResponse(res);
+    } catch {
+      addMessage(
+        "error",
+        "The server returned an unexpected response when starting the coding agent. Please try again."
+      );
+      return;
+    }
+    if (!res.ok) {
+      addMessage("error", data.detail || "Coding agent run failed.");
+      return;
+    }
+
+    showNotice("Coding agent is working — writing and running code…", "info");
+    const result = await pollAgentJob(data.job_id, (message) => {
+      if (message) showNotice(message, "info");
+    });
+    hideNotice();
+    if (!result.ok) {
+      addMessage("error", result.message || "Coding agent run failed.");
+      return;
+    }
+    addMessage(
+      "assistant",
+      result.data.answer,
+      [],
+      [],
+      result.data.steps || [],
+      result.files || [],
+      result.jobId || data.job_id
+    );
+  } catch (err) {
+    hideNotice();
+    addMessage("error", err.message || "Network error — is the server running?");
+  }
+}
+
 async function askQuestion(question) {
   ensureSession();
   addMessage("user", question);
@@ -1490,6 +1594,12 @@ async function askQuestion(question) {
 
   const s = currentSession();
   const history = sessionHistory();
+
+  if (codingAgentToggle?.checked && !codingAgentToggleWrap?.hidden) {
+    await askCodingAgent(question, s, history);
+    setLoading(false);
+    return;
+  }
 
   if (agentToggle?.checked && !agentToggleWrap?.hidden) {
     await askAgent(question, s, history);

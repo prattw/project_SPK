@@ -726,6 +726,41 @@ body {
   color: var(--usace-red);
 }
 
+.agent-files {
+  margin: 0.6rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.agent-files-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  width: 100%;
+}
+
+.agent-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 8px;
+  background: #eef2f8;
+  border: 1px solid var(--border);
+  color: var(--navy, #1e3a5f);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.agent-file-chip:hover {
+  background: #e2e8f3;
+  text-decoration: underline;
+}
+
 /* ---------- Composer ---------- */
 .composer-wrap {
   padding: 0.75rem 1rem 1rem;
