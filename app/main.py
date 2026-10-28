@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -270,21 +270,78 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def _icon_tag() -> str:
+    # Opt-in: only emit icon/manifest tags when a custom icon is configured
+    # (production's default has none, and keeps today's no-favicon behavior).
+    # A plain favicon alone isn't enough for a good "Add to Home Screen" icon
+    # — without an apple-touch-icon and a manifest with a maskable icon, iOS
+    # and Android fall back to a raw screenshot or an unmasked square image,
+    # which shows up with hard right-angle corners next to real app icons
+    # that get the OS's native rounded-squircle treatment.
+    if not settings.app_icon_path:
+        return ""
+    apple_path = settings.app_icon_apple_path or settings.app_icon_path
+    return "\n  ".join(
+        [
+            f'<link rel="icon" type="image/png" href="{settings.app_icon_path}" />',
+            f'<link rel="apple-touch-icon" href="{apple_path}" />',
+            '<link rel="manifest" href="/manifest.webmanifest" />',
+            '<meta name="apple-mobile-web-app-capable" content="yes" />',
+            f'<meta name="apple-mobile-web-app-title" content="{settings.app_display_name}" />',
+            '<meta name="theme-color" content="#1e3a5f" />',
+        ]
+    )
+
+
+@app.get("/manifest.webmanifest")
+def web_manifest() -> JSONResponse:
+    icons: list[dict[str, str]] = []
+    if settings.app_icon_apple_path:
+        # The dedicated apple-touch-icon variant is full-bleed at the
+        # documented 180x180 (see LOCAL_PROTOTYPE.md) — reuse it as the
+        # manifest's "any"-purpose icon too rather than a third image.
+        icons.append(
+            {"src": settings.app_icon_apple_path, "sizes": "180x180", "type": "image/png", "purpose": "any"}
+        )
+    elif settings.app_icon_path:
+        # Fallback: no dedicated apple icon configured, so reuse the plain
+        # icon at its known shipped size (see static/img/moli-beans-icon.png).
+        icons.append(
+            {"src": settings.app_icon_path, "sizes": "256x256", "type": "image/png", "purpose": "any"}
+        )
+    if settings.app_icon_maskable_path:
+        # Documented recommended size (LOCAL_PROTOTYPE.md) for the generated
+        # maskable variant — real content kept inside the center safe zone.
+        icons.append(
+            {
+                "src": settings.app_icon_maskable_path,
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "maskable",
+            }
+        )
+    manifest = {
+        "name": settings.app_welcome_title or settings.app_display_name,
+        "short_name": settings.app_display_name,
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#ffffff",
+        "theme_color": "#1e3a5f",
+        "icons": icons,
+    }
+    return JSONResponse(manifest, media_type="application/manifest+json")
+
+
 @app.get("/")
 def chat_ui():
     index = STATIC_DIR / "index.html"
     if not index.exists():
         return {"message": "UI not found. API is running — see /docs"}
     html = index.read_text(encoding="utf-8")
-    icon_tag = (
-        f'<link rel="icon" type="image/png" href="{settings.app_icon_path}" />'
-        if settings.app_icon_path
-        else ""
-    )
     welcome_logo = settings.app_icon_path or "/static/img/usace-sac-logo.png"
     html = (
         html.replace("{{APP_NAME}}", settings.app_display_name)
-        .replace("{{APP_ICON_TAG}}", icon_tag)
+        .replace("{{APP_ICON_TAG}}", _icon_tag())
         .replace("{{WELCOME_LOGO}}", welcome_logo)
         .replace("{{WELCOME_TITLE}}", settings.app_welcome_title)
     )

@@ -234,6 +234,53 @@ desktop shortcut and browser tab only. It's set via `APP_DISPLAY_NAME` and
 `APP_ICON_PATH` in `.env` (see `.env.local.example`); production on Railway
 doesn't set either, so it keeps showing "Project SPK" as before.
 
+### Home-screen icon on a phone or tablet (iOS/Android)
+
+If you open this laptop's URL on a phone or tablet over the LAN and use
+"Add to Home Screen" (iOS Safari) or "Install app" (Android Chrome), the
+icon needs more than just `APP_ICON_PATH` to look right next to real app
+icons — without a proper `apple-touch-icon` and a web manifest with a
+"maskable" icon, the browser falls back to a raw screenshot or shows the
+plain square photo unmasked, with hard right-angle corners instead of the
+rounded squircle/circle every other app icon gets.
+
+Two more `.env` variables fix this (already set in `.env.local.example`
+alongside `APP_ICON_PATH`):
+
+```bash
+APP_ICON_APPLE_PATH=/static/img/moli-beans-icon-apple-180.png
+APP_ICON_MASKABLE_PATH=/static/img/moli-beans-icon-maskable-512.png
+```
+
+- `APP_ICON_APPLE_PATH` — a **full-bleed** square PNG (no padding). iOS
+  applies its own rounded mask at display time, so the whole square should
+  be real image content — any padding you add would just show up as an
+  ugly gray band inside the rounded shape.
+- `APP_ICON_MASKABLE_PATH` — real content kept inside the **center ~80% "safe
+  zone"**, with the rest padded out to the edges. Android/Chrome crop
+  maskable icons to a circle, squircle, or rounded square depending on the
+  device's icon theme, so a full-bleed image here would get its edges
+  (e.g. the subject's face) clipped off by the mask.
+
+If you ever swap `APP_ICON_PATH` to a different photo, regenerate both
+variants from it with something like:
+
+```bash
+python3 - <<'EOF'
+from PIL import Image
+src = Image.open("static/img/your-photo.png").convert("RGBA")
+src.convert("RGB").resize((180, 180), Image.LANCZOS).save("static/img/your-photo-apple-180.png")
+canvas = Image.new("RGB", (512, 512), (255, 255, 255))  # pick a color that matches your photo's edges
+inner = src.convert("RGB").resize((368, 368), Image.LANCZOS)  # ~72% of 512, inside the safe zone
+canvas.paste(inner, ((512 - 368) // 2, (512 - 368) // 2))
+canvas.save("static/img/your-photo-maskable-512.png")
+EOF
+```
+
+Both variables are optional and fall back to `APP_ICON_PATH` if unset — you
+just get the old unmasked-square behavior on phones/tablets until you set
+them. Production's `.env` doesn't set any of this, so it's unaffected.
+
 Files live in `scripts/windows/` in this repo:
 
 | File | Purpose |

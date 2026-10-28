@@ -28,6 +28,21 @@ class Settings(BaseSettings):
     app_icon_path: str = ""  # e.g. /static/img/moli-beans-icon.png; empty = no favicon, USACE logo on welcome screen
     app_welcome_title: str = "USACE Policies and Publications AI Agent"
 
+    # Home-screen icon variants (iOS "Add to Home Screen" / Android/Chrome
+    # "Install app"). Without these, the browser falls back to a raw
+    # screenshot or the plain square app_icon_path image, which shows up with
+    # hard right-angle corners next to properly rounded native app icons.
+    # Both are optional and fall back to app_icon_path if unset — only set
+    # them if you've generated dedicated variants (see LOCAL_PROTOTYPE.md).
+    #   - app_icon_apple_path: full-bleed square PNG for iOS. iOS applies its
+    #     own rounded-squircle mask at display time, so no padding is needed.
+    #   - app_icon_maskable_path: PNG with real content kept inside the
+    #     center ~80% "safe zone" — Android/Chrome crop this to a
+    #     circle/squircle/rounded-square depending on the device, and a
+    #     full-bleed image would get its edges clipped off.
+    app_icon_apple_path: str = ""
+    app_icon_maskable_path: str = ""
+
     host: str = "0.0.0.0"
     port: int = 8000
     app_api_key: str = ""
