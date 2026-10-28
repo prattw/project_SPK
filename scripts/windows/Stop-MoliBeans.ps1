@@ -9,13 +9,28 @@
 #>
 
 $WslDistro = "Ubuntu"
-# Must match the user Start-MoliBeans.ps1 runs as (see $WslUser there),
-# otherwise pkill won't have permission to signal the uvicorn process.
+# A *preferred* WSL Linux username to try first - see Start-MoliBeans.ps1
+# for why this doesn't need to be correct. pkill is a no-op if there's no
+# matching process for that user, so trying a user with nothing running is
+# harmless; we also always try WSL's own default user as a fallback in case
+# this value is stale or was never right in the first place.
 $WslUser   = "cyrus"
 
 Write-Host "Stopping Moli Beans inside WSL2 ($WslDistro)..."
-Start-Process -FilePath "wsl.exe" `
-    -ArgumentList @("-d", $WslDistro, "-u", $WslUser, "--", "bash", "-lc", "pkill -f 'uvicorn app.main' || true") `
-    -WindowStyle Hidden -Wait
 
-Write-Host "Done."
+$candidates = @()
+if ($WslUser) { $candidates += $WslUser }
+$candidates += $null  # $null = WSL's own default user
+
+$tried = @()
+foreach ($candidate in $candidates) {
+    $label = if ($candidate) { $candidate } else { "(WSL default user)" }
+    if ($tried -contains $label) { continue }
+    $tried += $label
+    $argList = @("-d", $WslDistro)
+    if ($candidate) { $argList += @("-u", $candidate) }
+    $argList += @("--", "bash", "-lc", "pkill -f 'uvicorn app.main' || true")
+    Start-Process -FilePath "wsl.exe" -ArgumentList $argList -WindowStyle Hidden -Wait
+}
+
+Write-Host "Done (tried: $($tried -join ', '))."
