@@ -22,6 +22,11 @@ Word than to a hosted web service:
   library, read a document, and draft a report on its own — a first
   prototype of the "agents on government terminals" feature planned for the
   hosted app. See "Agent mode" below.
+- **It can also run an experimental coding agent** that writes a script,
+  actually runs it, and fixes it until it works — closer to how an AI coding
+  assistant behaves than a one-shot "here's some code" chat reply. This one
+  runs real shell commands with full permissions on this machine, so it's
+  off by default even here; see "Coding agent" below before turning it on.
 
 ## Why this works with (almost) no code changes
 
@@ -211,6 +216,80 @@ Known limitations of this first pass:
   output folder — no shell, no arbitrary filesystem, no other applications.
   Treat it as a testbed for what a tool-using model on local hardware can
   and can't do reliably, ahead of designing the real feature.
+
+## Coding agent (experimental, writes AND runs code)
+
+Agent mode above is deliberately read-only — it can search and summarize
+documents, nothing more. The **coding agent** is a separate, more powerful
+mode built for a different request entirely: *"write me a script"*. Instead
+of a single untested code block in a chat reply (the old behavior — code
+with no way to tell if it actually ran, or how to use it), the model:
+
+1. Writes the script to a scratch folder on this machine.
+2. Actually **runs it** and reads the real output — not a guess.
+3. If it fails, fixes it and runs it again, repeating until it works (or it
+   hits a real blocker, like a missing package that needs internet access).
+4. Gives you a final answer stating exactly which file(s) it wrote and the
+   command to run them, plus download links for the generated files.
+
+### Turning it on
+
+It is **off by default everywhere, including this laptop prototype** —
+`.env.local.example` does not enable it. Add this to your `.env` to turn it
+on:
+
+```bash
+ENABLE_CODING_AGENT=true
+```
+
+Then restart the app. A **"Coding agent"** checkbox appears in the chat
+composer, alongside (and mutually exclusive with) "Agent mode" — checking
+one unchecks the other.
+
+### Read this before enabling it — it is not sandboxed
+
+`run_command`, one of the coding agent's four tools, executes real shell
+commands with the **same OS permissions as whatever account runs this app**.
+There is no container, no VM, no restricted user — this is deliberately the
+same model as how Cursor's own agent runs commands directly on your
+machine, not a hosted multi-tenant code-execution service. A command the
+model runs is free to read/write anywhere your user account can, use the
+network if one is reachable, or (if told to) delete things outside the
+scratch folder. The only real guardrails are:
+
+- a dedicated scratch working directory (`data_local/_agent_output/code_workspace/<job id>/`)
+  so generated files are predictable and downloadable, not scattered around,
+- a command timeout (`CODING_AGENT_COMMAND_TIMEOUT_S`, default 90s) so a
+  hung process can't block a run forever, and
+- output truncation (`CODING_AGENT_MAX_OUTPUT_CHARS`), so a runaway command
+  can't exhaust memory.
+
+**Only ever enable this on a personal, single-user, local/offline machine —
+this laptop prototype, not a shared or internet-facing deployment.** As a
+second safety net regardless of this flag, the app also refuses to run the
+coding agent whenever the access roster (`ACCESS_ROSTER`) is non-empty —
+i.e. whenever the deployment is gated for more than one person — so a stray
+misconfiguration can't turn a shared server into a remote-code-execution
+endpoint. Production on Railway has both `ENABLE_CODING_AGENT=false` and a
+roster configured, so this is never reachable there.
+
+| Tool | What it does |
+|---|---|
+| `write_file` | Writes (or overwrites) a text file in the scratch workspace |
+| `read_file` | Reads a file back from the workspace |
+| `list_files` | Lists every file currently in the workspace, with size |
+| `run_command` | Runs a shell command (bash), cwd set to the workspace — see safety note above |
+
+Other knobs in `.env`:
+
+```bash
+CODING_AGENT_MAX_STEPS=20            # tool-call budget per run before it's forced to answer
+CODING_AGENT_COMMAND_TIMEOUT_S=90    # max seconds any single run_command call can take
+CODING_AGENT_MAX_OUTPUT_CHARS=6000   # stdout/stderr truncation limit per command
+```
+
+Like Agent mode, this needs a model that supports OpenAI-style tool
+calling — see the model list in "Swapping the model" above.
 
 ## Desktop icon / app-like window (Windows)
 
