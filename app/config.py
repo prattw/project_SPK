@@ -99,6 +99,23 @@ class Settings(BaseSettings):
     enable_agent_mode: bool = False
     agent_max_steps: int = 6
 
+    # Coding agent (tool-calling agent that writes AND executes code) — off by
+    # default everywhere, including production. This is intentionally more
+    # powerful than agent mode above: run_command executes real shell commands
+    # with the same permissions as whatever account runs this server process
+    # — there is no container/VM sandbox, the same way Cursor's own agent runs
+    # commands directly on your machine. Only ever enable this on a personal,
+    # single-user, local/offline machine (e.g. the deployment-laptop
+    # prototype) — never on a shared or internet-facing deployment. As a
+    # second safety net regardless of this flag, app/main.py also refuses to
+    # run it whenever the access roster is enabled (i.e. whenever this is a
+    # multi-user deployment), so a stray misconfiguration can't turn a shared
+    # server into a remote-code-execution endpoint.
+    enable_coding_agent: bool = False
+    coding_agent_max_steps: int = 20
+    coding_agent_command_timeout_s: int = 90
+    coding_agent_max_output_chars: int = 6000
+
     @property
     def roster_emails(self) -> frozenset[str]:
         return frozenset(
