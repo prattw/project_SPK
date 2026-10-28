@@ -629,6 +629,66 @@ body {
 .msg .md li { margin: 0.3rem 0; }
 .msg .md code { background: #f0f1f4; border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.82em; }
 
+.code-block {
+  margin: 0.6rem 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #1f2430;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  background: #2b3140;
+  color: #c7ccd6;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.74rem;
+}
+
+.code-block-lang {
+  text-transform: lowercase;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.code-block-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+
+.code-block-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #e7e9ee;
+  border-radius: 6px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.code-block-btn:hover { background: rgba(255, 255, 255, 0.18); }
+.code-block-btn:disabled { opacity: 0.7; cursor: default; }
+
+.msg .md .code-block pre {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.msg .md .code-block code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #e7e9ee;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
 .sources {
   margin-top: 0.55rem;
   font-size: 0.75rem;

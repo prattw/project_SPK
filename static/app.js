@@ -301,6 +301,198 @@ function inlineMd(s) {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
+const CODE_LANG_EXTENSIONS = {
+  python: "py",
+  py: "py",
+  python3: "py",
+  javascript: "js",
+  js: "js",
+  typescript: "ts",
+  ts: "ts",
+  jsx: "jsx",
+  tsx: "tsx",
+  bash: "sh",
+  sh: "sh",
+  shell: "sh",
+  zsh: "sh",
+  powershell: "ps1",
+  ps1: "ps1",
+  pwsh: "ps1",
+  batch: "bat",
+  bat: "bat",
+  cmd: "bat",
+  json: "json",
+  yaml: "yaml",
+  yml: "yaml",
+  toml: "toml",
+  ini: "ini",
+  sql: "sql",
+  html: "html",
+  xml: "xml",
+  css: "css",
+  java: "java",
+  kotlin: "kt",
+  csharp: "cs",
+  "c#": "cs",
+  cs: "cs",
+  cpp: "cpp",
+  "c++": "cpp",
+  c: "c",
+  go: "go",
+  golang: "go",
+  rust: "rs",
+  rs: "rs",
+  ruby: "rb",
+  rb: "rb",
+  php: "php",
+  dockerfile: "Dockerfile",
+  makefile: "Makefile",
+  markdown: "md",
+  md: "md",
+  text: "txt",
+  plaintext: "txt",
+  plain: "txt",
+};
+
+function codeFileExtension(lang) {
+  const key = (lang || "").trim().toLowerCase();
+  if (!key) return "txt";
+  return CODE_LANG_EXTENSIONS[key] || key.replace(/[^a-z0-9.+-]/gi, "") || "txt";
+}
+
+function fallbackCopyToClipboard(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  textarea.remove();
+  return ok;
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* fall through to the legacy path below */
+    }
+  }
+  return fallbackCopyToClipboard(text);
+}
+
+function downloadTextAsFile(text, filename) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+let codeBlockSeq = 0;
+
+function renderCodeBlock(lang, code) {
+  codeBlockSeq += 1;
+  const langLabel = (lang || "text").trim() || "text";
+  const wrap = document.createElement("div");
+  wrap.className = "code-block";
+
+  const header = document.createElement("div");
+  header.className = "code-block-header";
+
+  const langEl = document.createElement("span");
+  langEl.className = "code-block-lang";
+  langEl.textContent = langLabel;
+  header.appendChild(langEl);
+
+  const actions = document.createElement("div");
+  actions.className = "code-block-actions";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "code-block-btn code-copy-btn";
+  copyBtn.textContent = "Copy";
+  actions.appendChild(copyBtn);
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.type = "button";
+  downloadBtn.className = "code-block-btn code-download-btn";
+  downloadBtn.textContent = "Save file";
+  actions.appendChild(downloadBtn);
+
+  header.appendChild(actions);
+  wrap.appendChild(header);
+
+  const pre = document.createElement("pre");
+  const codeEl = document.createElement("code");
+  // Set via textContent (never innerHTML) so code containing < > & or stray
+  // backticks renders exactly as written instead of being markdown-processed
+  // or HTML-escaped incorrectly.
+  codeEl.textContent = code.replace(/\n$/, "");
+  pre.appendChild(codeEl);
+  wrap.appendChild(pre);
+
+  copyBtn.addEventListener("click", async () => {
+    const ok = await copyTextToClipboard(codeEl.textContent);
+    const original = copyBtn.textContent;
+    copyBtn.textContent = ok ? "Copied!" : "Copy failed";
+    copyBtn.disabled = true;
+    setTimeout(() => {
+      copyBtn.textContent = original;
+      copyBtn.disabled = false;
+    }, 1500);
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    const ext = codeFileExtension(langLabel);
+    const base = ext === "Dockerfile" || ext === "Makefile" ? ext : `snippet-${codeBlockSeq}.${ext}`;
+    downloadTextAsFile(codeEl.textContent, base);
+  });
+
+  return wrap;
+}
+
+// Fenced code blocks (```lang\n...\n```) are pulled out and rendered as real
+// <pre><code> blocks with Copy/Save buttons *before* the rest of the text
+// goes through the line-oriented markdown renderer below — that renderer
+// has no concept of multi-line blocks and would otherwise turn each code
+// line into its own disconnected, non-monospace paragraph.
+const FENCE_RE = /```([^\n`]*)\n([\s\S]*?)```/g;
+
+function renderRichMarkdownInto(container, text) {
+  const source = text || "";
+  let lastIndex = 0;
+  let match;
+  FENCE_RE.lastIndex = 0;
+
+  const appendTextSegment = (segment) => {
+    if (!segment) return;
+    const temp = document.createElement("div");
+    temp.innerHTML = renderMarkdown(segment);
+    while (temp.firstChild) container.appendChild(temp.firstChild);
+  };
+
+  while ((match = FENCE_RE.exec(source)) !== null) {
+    appendTextSegment(source.slice(lastIndex, match.index));
+    container.appendChild(renderCodeBlock(match[1], match[2]));
+    lastIndex = FENCE_RE.lastIndex;
+  }
+  appendTextSegment(source.slice(lastIndex));
+}
+
 function renderMarkdown(text) {
   const lines = escapeHtml(text).split("\n");
   const out = [];
