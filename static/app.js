@@ -17,6 +17,8 @@ const configStatus = document.getElementById("configStatus");
 const versionBadge = document.getElementById("versionBadge");
 const agentToggleWrap = document.getElementById("agentToggleWrap");
 const agentToggle = document.getElementById("agentToggle");
+const codingAgentToggleWrap = document.getElementById("codingAgentToggleWrap");
+const codingAgentToggle = document.getElementById("codingAgentToggle");
 const sessionListEl = document.getElementById("sessionList");
 const sessionSearch = document.getElementById("sessionSearch");
 const newChatBtn = document.getElementById("newChatBtn");
@@ -64,10 +66,14 @@ function requireSignIn() {
   loginEmail.focus();
 }
 
+function isDownloadLinkUrl(url) {
+  return typeof url === "string" && (url.startsWith("/download/") || url.startsWith("/agent/code/files/"));
+}
+
 function withToken(url) {
   // Plain <a href> downloads can't send headers — pass the token in the query.
   const token = authToken();
-  if (!token || typeof url !== "string" || !url.startsWith("/download/")) return url;
+  if (!token || !isDownloadLinkUrl(url)) return url;
   return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
 }
 
@@ -176,7 +182,9 @@ function openSession(id) {
   messagesEl.innerHTML = "";
   clearUploadChips();
   welcomeEl.hidden = s.messages.length > 0;
-  s.messages.forEach((m) => renderMessage(m.role, m.text, m.sources || [], m.citations || [], m.steps || []));
+  s.messages.forEach((m) =>
+    renderMessage(m.role, m.text, m.sources || [], m.citations || [], m.steps || [], m.files || [], m.jobId || null)
+  );
   showView("chat");
   renderSessionList();
   chatScroll.scrollTop = chatScroll.scrollHeight;
@@ -301,6 +309,198 @@ function inlineMd(s) {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
+const CODE_LANG_EXTENSIONS = {
+  python: "py",
+  py: "py",
+  python3: "py",
+  javascript: "js",
+  js: "js",
+  typescript: "ts",
+  ts: "ts",
+  jsx: "jsx",
+  tsx: "tsx",
+  bash: "sh",
+  sh: "sh",
+  shell: "sh",
+  zsh: "sh",
+  powershell: "ps1",
+  ps1: "ps1",
+  pwsh: "ps1",
+  batch: "bat",
+  bat: "bat",
+  cmd: "bat",
+  json: "json",
+  yaml: "yaml",
+  yml: "yaml",
+  toml: "toml",
+  ini: "ini",
+  sql: "sql",
+  html: "html",
+  xml: "xml",
+  css: "css",
+  java: "java",
+  kotlin: "kt",
+  csharp: "cs",
+  "c#": "cs",
+  cs: "cs",
+  cpp: "cpp",
+  "c++": "cpp",
+  c: "c",
+  go: "go",
+  golang: "go",
+  rust: "rs",
+  rs: "rs",
+  ruby: "rb",
+  rb: "rb",
+  php: "php",
+  dockerfile: "Dockerfile",
+  makefile: "Makefile",
+  markdown: "md",
+  md: "md",
+  text: "txt",
+  plaintext: "txt",
+  plain: "txt",
+};
+
+function codeFileExtension(lang) {
+  const key = (lang || "").trim().toLowerCase();
+  if (!key) return "txt";
+  return CODE_LANG_EXTENSIONS[key] || key.replace(/[^a-z0-9.+-]/gi, "") || "txt";
+}
+
+function fallbackCopyToClipboard(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  textarea.remove();
+  return ok;
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* fall through to the legacy path below */
+    }
+  }
+  return fallbackCopyToClipboard(text);
+}
+
+function downloadTextAsFile(text, filename) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+let codeBlockSeq = 0;
+
+function renderCodeBlock(lang, code) {
+  codeBlockSeq += 1;
+  const langLabel = (lang || "text").trim() || "text";
+  const wrap = document.createElement("div");
+  wrap.className = "code-block";
+
+  const header = document.createElement("div");
+  header.className = "code-block-header";
+
+  const langEl = document.createElement("span");
+  langEl.className = "code-block-lang";
+  langEl.textContent = langLabel;
+  header.appendChild(langEl);
+
+  const actions = document.createElement("div");
+  actions.className = "code-block-actions";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "code-block-btn code-copy-btn";
+  copyBtn.textContent = "Copy";
+  actions.appendChild(copyBtn);
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.type = "button";
+  downloadBtn.className = "code-block-btn code-download-btn";
+  downloadBtn.textContent = "Save file";
+  actions.appendChild(downloadBtn);
+
+  header.appendChild(actions);
+  wrap.appendChild(header);
+
+  const pre = document.createElement("pre");
+  const codeEl = document.createElement("code");
+  // Set via textContent (never innerHTML) so code containing < > & or stray
+  // backticks renders exactly as written instead of being markdown-processed
+  // or HTML-escaped incorrectly.
+  codeEl.textContent = code.replace(/\n$/, "");
+  pre.appendChild(codeEl);
+  wrap.appendChild(pre);
+
+  copyBtn.addEventListener("click", async () => {
+    const ok = await copyTextToClipboard(codeEl.textContent);
+    const original = copyBtn.textContent;
+    copyBtn.textContent = ok ? "Copied!" : "Copy failed";
+    copyBtn.disabled = true;
+    setTimeout(() => {
+      copyBtn.textContent = original;
+      copyBtn.disabled = false;
+    }, 1500);
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    const ext = codeFileExtension(langLabel);
+    const base = ext === "Dockerfile" || ext === "Makefile" ? ext : `snippet-${codeBlockSeq}.${ext}`;
+    downloadTextAsFile(codeEl.textContent, base);
+  });
+
+  return wrap;
+}
+
+// Fenced code blocks (```lang\n...\n```) are pulled out and rendered as real
+// <pre><code> blocks with Copy/Save buttons *before* the rest of the text
+// goes through the line-oriented markdown renderer below — that renderer
+// has no concept of multi-line blocks and would otherwise turn each code
+// line into its own disconnected, non-monospace paragraph.
+const FENCE_RE = /```([^\n`]*)\n([\s\S]*?)```/g;
+
+function renderRichMarkdownInto(container, text) {
+  const source = text || "";
+  let lastIndex = 0;
+  let match;
+  FENCE_RE.lastIndex = 0;
+
+  const appendTextSegment = (segment) => {
+    if (!segment) return;
+    const temp = document.createElement("div");
+    temp.innerHTML = renderMarkdown(segment);
+    while (temp.firstChild) container.appendChild(temp.firstChild);
+  };
+
+  while ((match = FENCE_RE.exec(source)) !== null) {
+    appendTextSegment(source.slice(lastIndex, match.index));
+    container.appendChild(renderCodeBlock(match[1], match[2]));
+    lastIndex = FENCE_RE.lastIndex;
+  }
+  appendTextSegment(source.slice(lastIndex));
+}
+
 function renderMarkdown(text) {
   const lines = escapeHtml(text).split("\n");
   const out = [];
@@ -346,6 +546,10 @@ const AGENT_TOOL_LABELS = {
   list_documents: "Listed indexed documents",
   read_document: "Read a document",
   draft_docx_report: "Drafted a report",
+  write_file: "Wrote a file",
+  read_file: "Read a file back",
+  list_files: "Listed workspace files",
+  run_command: "Ran a command",
 };
 
 function renderAgentSteps(steps) {
@@ -366,7 +570,33 @@ function renderAgentSteps(steps) {
   return wrap;
 }
 
-function renderMessage(role, text, sources = [], citations = [], steps = []) {
+function formatFileBytes(n) {
+  if (!n || n < 1024) return `${n || 0} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAgentFiles(files, jobId) {
+  const wrap = document.createElement("div");
+  wrap.className = "agent-files";
+  const label = document.createElement("div");
+  label.className = "agent-files-label";
+  label.textContent = files.length === 1 ? "Generated file" : `Generated files (${files.length})`;
+  wrap.appendChild(label);
+  for (const f of files) {
+    const encodedPath = f.path.split("/").map(encodeURIComponent).join("/");
+    const url = `/agent/code/files/${encodeURIComponent(jobId)}/${encodedPath}`;
+    const a = document.createElement("a");
+    a.className = "agent-file-chip";
+    a.href = withToken(url);
+    a.download = f.path.split("/").pop() || f.path;
+    a.textContent = `${f.path} (${formatFileBytes(f.bytes)})`;
+    wrap.appendChild(a);
+  }
+  return wrap;
+}
+
+function renderMessage(role, text, sources = [], citations = [], steps = [], files = [], jobId = null) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   if (role === "file") {
@@ -384,8 +614,9 @@ function renderMessage(role, text, sources = [], citations = [], steps = []) {
     if (steps?.length) div.appendChild(renderAgentSteps(steps));
     const md = document.createElement("div");
     md.className = "md";
-    md.innerHTML = renderMarkdown(text);
+    renderRichMarkdownInto(md, text);
     div.appendChild(md);
+    if (files?.length && jobId) div.appendChild(renderAgentFiles(files, jobId));
   } else {
     const p = document.createElement("p");
     p.textContent = text;
@@ -432,13 +663,13 @@ function reportClientError(message, context) {
   }
 }
 
-function addMessage(role, text, sources = [], citations = [], steps = []) {
+function addMessage(role, text, sources = [], citations = [], steps = [], files = [], jobId = null) {
   welcomeEl.hidden = true;
-  renderMessage(role, text, sources, citations, steps);
+  renderMessage(role, text, sources, citations, steps, files, jobId);
   if (role === "error") reportClientError(text, "chat");
 
   const s = ensureSession();
-  s.messages.push({ role, text, sources, citations, steps });
+  s.messages.push({ role, text, sources, citations, steps, files, jobId });
   if (role === "user" && s.title === "New conversation") {
     s.title = text.length > 60 ? text.slice(0, 57) + "..." : text;
   }
@@ -726,6 +957,7 @@ async function loadLimits() {
     updateConfigStatus(data);
     if (data.version) versionBadge.textContent = `BETA v${data.version}`;
     if (agentToggleWrap) agentToggleWrap.hidden = !data.agent_enabled;
+    if (codingAgentToggleWrap) codingAgentToggleWrap.hidden = !data.coding_agent_enabled;
 
     const L = data.context_limits;
     const ctxK = Math.round(L.max_context_chars / 1000);
@@ -745,7 +977,7 @@ async function loadLimits() {
 /* ---------- Files / indexing ---------- */
 
 function isLocalDownloadUrl(url) {
-  return typeof url === "string" && url.startsWith("/download/");
+  return isDownloadLinkUrl(url);
 }
 
 function documentLinkAttrs(url) {
@@ -1018,7 +1250,13 @@ async function pollAgentJob(jobId, onProgress) {
       continue;
     }
     if (job.status === "done" && job.agent_result) {
-      return { ok: true, data: job.agent_result, elapsed_ms: job.elapsed_ms };
+      return {
+        ok: true,
+        data: job.agent_result,
+        files: job.agent_files || [],
+        jobId: job.job_id,
+        elapsed_ms: job.elapsed_ms,
+      };
     }
     return { ok: false, message: job.message || "Agent run failed." };
   }
@@ -1226,6 +1464,14 @@ viewChat.addEventListener("drop", (e) => {
   handleFiles(e.dataTransfer.files);
 });
 
+// Only one agent mode can drive a given message — picking one turns the other off.
+agentToggle?.addEventListener("change", () => {
+  if (agentToggle.checked && codingAgentToggle) codingAgentToggle.checked = false;
+});
+codingAgentToggle?.addEventListener("change", () => {
+  if (codingAgentToggle.checked && agentToggle) agentToggle.checked = false;
+});
+
 // Stop Finder from pasting a file path into the question box when dropped on the textarea.
 questionEl.addEventListener("dragover", (e) => {
   if (hasFileDrag(e.dataTransfer)) e.preventDefault();
@@ -1290,6 +1536,56 @@ async function askAgent(question, s, history) {
   }
 }
 
+async function askCodingAgent(question, s, history) {
+  const payload = { question };
+  if (s?.id) payload.session_id = s.id;
+  if (history?.length) payload.history = history.slice(0, -1);
+
+  try {
+    const res = await apiFetch("/agent/code/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    let data;
+    try {
+      data = await readJsonResponse(res);
+    } catch {
+      addMessage(
+        "error",
+        "The server returned an unexpected response when starting the coding agent. Please try again."
+      );
+      return;
+    }
+    if (!res.ok) {
+      addMessage("error", data.detail || "Coding agent run failed.");
+      return;
+    }
+
+    showNotice("Coding agent is working — writing and running code…", "info");
+    const result = await pollAgentJob(data.job_id, (message) => {
+      if (message) showNotice(message, "info");
+    });
+    hideNotice();
+    if (!result.ok) {
+      addMessage("error", result.message || "Coding agent run failed.");
+      return;
+    }
+    addMessage(
+      "assistant",
+      result.data.answer,
+      [],
+      [],
+      result.data.steps || [],
+      result.files || [],
+      result.jobId || data.job_id
+    );
+  } catch (err) {
+    hideNotice();
+    addMessage("error", err.message || "Network error — is the server running?");
+  }
+}
+
 async function askQuestion(question) {
   ensureSession();
   addMessage("user", question);
@@ -1298,6 +1594,12 @@ async function askQuestion(question) {
 
   const s = currentSession();
   const history = sessionHistory();
+
+  if (codingAgentToggle?.checked && !codingAgentToggleWrap?.hidden) {
+    await askCodingAgent(question, s, history);
+    setLoading(false);
+    return;
+  }
 
   if (agentToggle?.checked && !agentToggleWrap?.hidden) {
     await askAgent(question, s, history);

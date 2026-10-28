@@ -6,6 +6,10 @@ __pycache__/
 venv/
 .env
 
+# Node (dev-only frontend tests under tests/js/)
+node_modules/
+package-lock.json
+
 # RAG artifacts
 data/*
 !data/.gitkeep

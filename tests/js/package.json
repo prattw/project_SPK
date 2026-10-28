@@ -1,0 +1,11 @@
+{
+  "name": "project-spk-frontend-tests",
+  "private": true,
+  "description": "Lightweight jsdom-based regression tests for static/app.js rendering helpers. Not part of the Python app's runtime or deploy — dev-only.",
+  "scripts": {
+    "test": "node test_render.js && node test_coding_agent_ui.js"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.0"
+  }
+}

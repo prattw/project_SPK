@@ -122,6 +122,10 @@
             <input type="checkbox" id="agentToggle" />
             Agent mode &mdash; let the model search the library, read a document, and draft a report on its own (local model only, experimental)
           </label>
+          <label class="composer-option" id="codingAgentToggleWrap" hidden>
+            <input type="checkbox" id="codingAgentToggle" />
+            Coding agent &mdash; the model writes a script to a scratch folder, runs it, and fixes it until it actually works (local-only, runs real shell commands with full machine permissions &mdash; see Help)
+          </label>
           <p class="composer-hint">Upload or drag-and-drop files into the chat &mdash; PDFs, Word, Excel, CSV, PowerPoint, text, and images (JPG/PNG, read with OCR). The full Document Library is always searched alongside your uploads. Large PDFs index in the background &mdash; see Help for details.</p>
         </form>
       </section>
@@ -2079,9 +2083,16 @@
         <li><strong>Scanned</strong> PDFs (image-only, no text) may index poorly until OCR is added &mdash; export searchable PDFs when possible.</li>
         <li>Revit/DWG uploads are stored; use <strong>IFC or PDF exports</strong> for deeper analysis.</li>
       </ul>
+      <h3>Coding agent (when enabled)</h3>
+      <ul>
+        <li>Checking <strong>Coding agent</strong> for a message has the model write a script to a scratch folder on this machine, actually <strong>run it</strong>, and fix it if it fails &mdash; instead of handing you an untested guess.</li>
+        <li>The final answer tells you exactly which file(s) it wrote and the command to run them yourself; generated files also appear as <strong>download chips</strong> under the answer.</li>
+        <li><strong>Safety:</strong> this runs real shell commands with the same permissions as the account running the app &mdash; there is no sandbox, the same way Cursor's own agent runs commands on your machine. Only ever enable this on a personal, single-user, offline/local machine &mdash; never on a shared or internet-facing server.</li>
+        <li>If this toggle doesn't appear, it isn't enabled on this deployment.</li>
+      </ul>
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.4"></script>
+  <script src="/static/app.js?v=0.9.5"></script>
 </body>
 </html>

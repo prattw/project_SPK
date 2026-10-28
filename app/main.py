@@ -21,12 +21,14 @@ from app.auth import (
     require_api_key,
     roster_enabled,
 )
+from app.coding_agent import workspace_dir as coding_agent_workspace_dir
 from app.config import settings
 from app.downloads import document_link_url, guess_media_type, resolve_data_file
 from app.ingest import INGESTABLE_EXTENSIONS, ingest_directory, ingest_path, pdf_needs_background, save_upload
 from app.jobs import (
     get_job,
     start_background_agent,
+    start_background_coding_agent,
     start_background_ingest,
     start_background_library_ingest,
     start_background_query,
@@ -127,6 +129,11 @@ class AgentRequest(BaseModel):
     history: list[dict[str, str]] | None = Field(default=None, max_length=20)
 
 
+class AgentFile(BaseModel):
+    path: str
+    bytes: int = 0
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     kind: str = "ingest"
@@ -145,6 +152,7 @@ class JobStatusResponse(BaseModel):
     library_report: dict | None = None
     agent_steps: list[AgentStep] = []
     agent_result: AgentResponse | None = None
+    agent_files: list[AgentFile] = []
 
 
 class LibraryIngestRequest(BaseModel):
@@ -201,6 +209,7 @@ class HealthResponse(BaseModel):
     llm_configured: bool
     embeddings_configured: bool
     agent_enabled: bool = False
+    coding_agent_enabled: bool = False
 
 
 def _require_usage_admin(request: Request) -> str:
@@ -315,6 +324,15 @@ def _embeddings_configured() -> bool:
     return bool(settings.openai_api_key)
 
 
+def _coding_agent_available() -> bool:
+    # Defense in depth: even if ENABLE_CODING_AGENT is left on by mistake, never
+    # expose raw shell execution on a shared, roster-gated (multi-tenant)
+    # deployment. This tool runs commands with full server-process permissions —
+    # see app/coding_agent.py's module docstring — so it must stay confined to a
+    # personal/local/offline machine with no access roster configured.
+    return settings.enable_coding_agent and not roster_enabled()
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     # Do not open Chroma here — large indexes can OOM or stall Railway deploy checks.
@@ -329,6 +347,7 @@ def health() -> HealthResponse:
         llm_configured=bool(settings.openai_api_key),
         embeddings_configured=_embeddings_configured(),
         agent_enabled=settings.enable_agent_mode,
+        coding_agent_enabled=_coding_agent_available(),
         context_limits=ContextLimits(
             max_upload_mb=settings.max_upload_mb,
             max_extract_chars_per_file=settings.max_extract_chars_per_file,
@@ -516,7 +535,7 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
     if job.kind == "query" and job.result:
         result = QueryResponse(**job.result)
     agent_result = None
-    if job.kind == "agent" and job.result:
+    if job.kind in ("agent", "coding_agent") and job.result:
         agent_result = AgentResponse(**job.result)
     return JobStatusResponse(
         job_id=job.id,
@@ -536,6 +555,7 @@ def job_status(request: Request, job_id: str) -> JobStatusResponse:
         library_report=job.library_report,
         agent_steps=[AgentStep(**s) for s in job.agent_steps],
         agent_result=agent_result,
+        agent_files=[AgentFile(**f) for f in job.agent_files],
     )
 
 
@@ -578,6 +598,58 @@ def agent_run(request: Request, body: AgentRequest) -> QueryJobResponse:
         history=body.history,
     )
     return QueryJobResponse(job_id=job.id, status=job.status, message="Agent started.")
+
+
+@app.post("/agent/code/run", response_model=QueryJobResponse)
+def coding_agent_run(request: Request, body: AgentRequest) -> QueryJobResponse:
+    require_api_key(request)
+    _require_keys()
+    if not _coding_agent_available():
+        detail = (
+            "The coding agent is not enabled on this server (set ENABLE_CODING_AGENT=true)."
+            if not settings.enable_coding_agent
+            else (
+                "The coding agent is disabled on this deployment because access-roster sign-in is "
+                "enabled. It runs real shell commands with full server permissions and is only safe "
+                "on a personal, single-user, local/offline machine."
+            )
+        )
+        raise HTTPException(status_code=404, detail=detail)
+    email = authenticated_email(request)
+    job = start_background_coding_agent(
+        question=body.question,
+        email=email,
+        session_id=body.session_id,
+        history=body.history,
+    )
+    return QueryJobResponse(job_id=job.id, status=job.status, message="Coding agent started.")
+
+
+@app.get("/agent/code/files/{job_id}/{filename:path}")
+def download_coding_agent_file(request: Request, job_id: str, filename: str) -> FileResponse:
+    require_api_key(request)
+    if not _coding_agent_available():
+        raise HTTPException(status_code=404, detail="The coding agent is not enabled on this server.")
+
+    job = get_job(job_id)
+    if not job or job.kind != "coding_agent":
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    workspace = coding_agent_workspace_dir(job_id).resolve()
+    candidate = (workspace / filename).resolve()
+    try:
+        candidate.relative_to(workspace)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    return FileResponse(
+        candidate,
+        media_type=guess_media_type(candidate),
+        filename=candidate.name,
+        content_disposition_type="attachment",
+    )
 
 
 class ClientErrorReport(BaseModel):
