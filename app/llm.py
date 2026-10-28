@@ -40,6 +40,17 @@ _DRAFTING_HINT = """
 The user wants help drafting or revising text. Lead with the improved wording or outline they can use directly.
 """
 
+CODING_FORMAT = """The user wants help with code, a script, or technical automation — not a document or compliance review.
+
+- Give the actual code in a fenced code block with the correct language tag (```python, ```bash, ```powershell, ```sql, etc.) — never describe code only in prose.
+- Immediately after the code block, give short, concrete "How to run this" instructions: the exact filename to save it as, the exact command to run it, and any dependency that needs installing first (name the install command, e.g. `pip install requests`).
+- This may run on an offline or disconnected laptop, including in deployed/field conditions with no internet access. If a dependency requires internet access to install, say so explicitly so the user knows before they try it. Prefer a standard-library solution over adding a new dependency when one works just as well.
+- Keep code clear and commented for a reader who may not be a professional developer.
+- If the request is ambiguous (unspecified language, OS, or inputs), make a reasonable assumption, state it in one line, and proceed — do not block on a clarifying question unless truly necessary.
+- If the user pasted in their own code or an error message, identify the specific bug or cause first, then give the full corrected code.
+- Do not apply the USACE compliance-review format for this — no COMPLIANT/NON-COMPLIANT labels, no "Confidence Assessment," no AI disclaimer.
+"""
+
 _UPLOAD_REVIEW_HINT = """
 The context includes uploaded project file(s) (labeled with .pdf/.docx filenames) AND Engineer Regulations from the Document Library.
 Treat the uploaded file(s) as the document under review. Treat ER/EM/UFC excerpts as the standards to compare against.
@@ -61,6 +72,22 @@ _DRAFTING_RE = re.compile(
     r"draft|write|compose|prepare|rewrite|revise|proofread|edit|"
     r"create a chapter|areas for improvement|areas of improvement|improve(?:ment|ments)?|"
     r"suggest(?:ion|ions)?|better way|make this clearer"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_CODING_RE = re.compile(
+    r"\b("
+    r"write (?:me |us )?(?:a |an |the )?(?:python|bash|shell|powershell|ps1|batch|vba|sql|regex)\b|"
+    r"(?:python|bash|shell|powershell|ps1|batch|vba) (?:script|code|program|function|snippet)|"
+    r"write (?:me |us )?(?:a |an |the )?(?:script|program|function|macro|regex|automation)\b|"
+    r"(?:fix|debug|refactor|review|optimize) (?:this|my|the) (?:code|script|function|bug|error|exception|traceback|stack ?trace)|"
+    r"code review|unit tests?|write (?:a |an )?test\b|"
+    r"excel (?:macro|formula|vba)|google sheets? (?:formula|script)|"
+    r"(?:write|create) (?:a |an )?(?:csv|json|xml|yaml) (?:parser|parsing|converter)|"
+    r"automate (?:this|the|my)|"
+    r"(?:sql|powershell|bash|python) (?:query|command|one-?liner)|"
+    r"how do i code|how to code|programming (?:help|question)"
     r")\b",
     re.IGNORECASE,
 )
@@ -89,7 +116,33 @@ def question_wants_drafting_help(question: str) -> bool:
     return bool(_DRAFTING_RE.search(question))
 
 
-def _build_system_prompt(*, grounded: bool, compliance_mode: bool, drafting_mode: bool) -> str:
+def question_wants_coding_help(question: str) -> bool:
+    """True when the user is asking for code, a script, or technical automation."""
+    return bool(_CODING_RE.search(question))
+
+
+def _build_system_prompt(
+    *,
+    grounded: bool,
+    compliance_mode: bool,
+    drafting_mode: bool,
+    coding_mode: bool = False,
+) -> str:
+    if coding_mode and not compliance_mode:
+        base = (
+            "You are a software engineering assistant helping a USACE (U.S. Army Corps of "
+            "Engineers) user who may be working on an offline or disconnected laptop, including "
+            "in deployed/field conditions. They are asking for code, a script, or technical "
+            "automation help — not a document or compliance review.\n"
+        )
+        if grounded:
+            base += (
+                "\nSome document context was retrieved for this question; use it only if it is "
+                "actually relevant to the coding request (e.g. the user references a specific "
+                "uploaded file's format or content). Otherwise ignore it entirely.\n"
+            )
+        return base + "\n" + CODING_FORMAT
+
     fmt = COMPLIANCE_FORMAT if compliance_mode else CONVERSATIONAL_FORMAT
     drafting = _DRAFTING_HINT if drafting_mode and not compliance_mode else ""
     if grounded:
@@ -294,8 +347,11 @@ def generate_general_answer(
 ) -> str:
     compliance = question_wants_compliance_review(question)
     drafting = question_wants_drafting_help(question)
-    system = _build_system_prompt(grounded=False, compliance_mode=compliance, drafting_mode=drafting)
-    temp = 0.2 if compliance else 0.45
+    coding = question_wants_coding_help(question)
+    system = _build_system_prompt(
+        grounded=False, compliance_mode=compliance, drafting_mode=drafting, coding_mode=coding
+    )
+    temp = 0.15 if coding and not compliance else (0.2 if compliance else 0.45)
     messages = [{"role": "system", "content": system}]
     messages.extend(_history_messages(history))
     messages.append({"role": "user", "content": question})
@@ -312,10 +368,13 @@ def generate_answer(
 ) -> str:
     compliance = question_wants_compliance_review(question)
     drafting = question_wants_drafting_help(question)
-    system = _build_system_prompt(grounded=True, compliance_mode=compliance, drafting_mode=drafting)
+    coding = question_wants_coding_help(question)
+    system = _build_system_prompt(
+        grounded=True, compliance_mode=compliance, drafting_mode=drafting, coding_mode=coding
+    )
     if has_user_uploads and compliance:
         system += _UPLOAD_REVIEW_HINT
-    temp = 0.2 if compliance else 0.45
+    temp = 0.15 if coding and not compliance else (0.2 if compliance else 0.45)
     citation_block = _format_citation_block(citations)
     messages = [{"role": "system", "content": system}]
     messages.extend(_history_messages(history))
