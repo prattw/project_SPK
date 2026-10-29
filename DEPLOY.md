@@ -43,6 +43,7 @@ In Railway → **Variables**, add:
 | `OPENAI_API_KEY` | Yes | GPT answers + embeddings |
 | `OPENAI_BASE_URL` | | Override API root (Azure/proxy/gateway); blank = OpenAI default |
 | `OPENAI_MODEL` | | `gpt-4o-mini` (default) |
+| `OPENAI_VISION_MODEL` | | Model for image/scanned-PDF OCR; blank = reuse `OPENAI_MODEL` (fine in production — `gpt-4o-mini` supports vision) |
 | `AUTH_SECRET` | Recommended | Signs 24-hour login tokens; keep stable across deploys |
 | `ACCESS_ROSTER` | | Comma-separated allowed emails; defaults to the built-in roster |
 | `AUTH_TOKEN_HOURS` | | `24` (default) — re-login interval |

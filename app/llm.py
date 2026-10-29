@@ -120,11 +120,14 @@ def _create_completion(
     *,
     temperature: float,
     tools: list[dict[str, Any]] | None = None,
+    model: str | None = None,
 ):
     """Shared low-level chat-completion call with cross-model parameter fallback.
 
     Newer OpenAI models (gpt-5 family, o-series) require max_completion_tokens
     and reject custom temperature; older ones (gpt-4o family) accept max_tokens.
+    `model` overrides OPENAI_MODEL for this call only (used for vision calls,
+    which may need a different model than everyday chat — see OPENAI_VISION_MODEL).
     Returns the raw SDK message object (content and, if requested, tool_calls).
     """
     if not settings.openai_api_key:
@@ -132,7 +135,7 @@ def _create_completion(
 
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url or None)
     kwargs: dict = {
-        "model": settings.openai_model,
+        "model": model or settings.openai_model,
         "messages": messages,
         "max_completion_tokens": settings.openai_max_tokens,
         "temperature": temperature,
@@ -163,9 +166,9 @@ def _create_completion(
     raise RuntimeError("Could not find compatible parameters for the configured model")
 
 
-def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
+def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35, model: str | None = None) -> str:
     """Call the chat API and return the assistant's text content."""
-    message = _create_completion(messages, temperature=temperature)
+    message = _create_completion(messages, temperature=temperature, model=model)
     return (message.content or "").strip()
 
 
@@ -219,6 +222,10 @@ IMAGE_MIME_BY_EXT = {
 def _vision_call(data: bytes, mime: str, prompt: str) -> str:
     """Send image bytes + a prompt to the configured vision model.
 
+    Uses OPENAI_VISION_MODEL if set, otherwise OPENAI_MODEL — see the
+    OPENAI_VISION_MODEL comment in config.py for why these can need to differ
+    (a non-vision local/Ollama chat model silently returns no transcription
+    for an image instead of erroring).
     Returns the model text, or "" if not possible (no key, empty data, or
     model/network error). Callers decide on a fallback.
     """
@@ -235,7 +242,7 @@ def _vision_call(data: bytes, mime: str, prompt: str) -> str:
         }
     ]
     try:
-        return _chat(messages)
+        return _chat(messages, model=settings.openai_vision_model or None)
     except Exception:
         return ""
 
