@@ -13,6 +13,17 @@ class Settings(BaseSettings):
     openai_base_url: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_max_tokens: int = 4096
+    # Model used for vision calls (image description, scanned-PDF OCR). Empty
+    # = reuse OPENAI_MODEL. gpt-4o-mini (the default OPENAI_MODEL) supports
+    # vision, so production needs no override. Local/Ollama setups often pick
+    # a text-only chat model (e.g. qwen2.5:7b-instruct, qwen3:8b) that has no
+    # image understanding at all — pointing OPENAI_MODEL's non-vision model at
+    # an image doesn't error, it just silently produces no transcription, so
+    # every scanned page/document ends up indexed with zero chunks and no
+    # warning. Set this to a vision-capable model (e.g. qwen2.5vl:7b via
+    # Ollama; see ollama.com/search?c=vision) to fix OCR without changing
+    # which model handles everyday chat.
+    openai_vision_model: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     embedding_provider: str = "openai"
     embedding_batch_size: int = 128
