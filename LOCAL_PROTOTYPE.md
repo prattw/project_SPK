@@ -440,14 +440,33 @@ A couple of things worth knowing before re-running against a large library:
   pages at even 10-30s/page can take a long time. Check whether Ollama is
   actually using your GPU (`nvidia-smi` while a page is OCR'ing should show
   load) — CPU-only vision inference is dramatically slower.
-- **If that's too slow to be practical**, note that `OPENAI_API_KEY` and
-  `OPENAI_BASE_URL` are shared across chat, vision, and embeddings — there's
-  no way yet to send *just* OCR calls to real OpenAI (fast, cheap, accurate)
-  while keeping everyday chat on your local Ollama model. The only way to use
-  real OpenAI for OCR today is to point `OPENAI_BASE_URL`/`OPENAI_API_KEY` at
-  OpenAI for the whole app, which also sends chat there. A per-call
-  key/base-url override for vision specifically would fix this — ask if you
-  want it built.
+- **If that's too slow to be practical**, route just the vision/OCR calls to
+  real OpenAI while keeping everyday chat on your local Ollama model —
+  `OPENAI_VISION_API_KEY` (+ optional `OPENAI_VISION_BASE_URL`) overrides
+  `OPENAI_API_KEY`/`OPENAI_BASE_URL` for vision calls only:
+
+  ```bash
+  # .env
+  OPENAI_VISION_API_KEY=sk-your-real-openai-key-here
+  OPENAI_VISION_MODEL=gpt-4o-mini
+  # OPENAI_VISION_BASE_URL left unset — defaults to real api.openai.com,
+  # not whatever OPENAI_BASE_URL points at.
+  ```
+
+  Restart the app afterward. This typically turns "tens of minutes per page
+  on a laptop GPU" into a couple of seconds per page — but the pages
+  themselves get sent to OpenAI's servers for that call (chat and embeddings
+  stay exactly where they were). Worth it if your documents aren't sensitive
+  enough to require staying fully local; not worth it if they are.
+
+- **If a long document's OCR output looks incomplete**, check the ingest
+  output for a line like `reached the 60-page OCR budget at page 61 of 340;
+  further scanned/image pages were not transcribed`. `MAX_OCR_PAGES` (default
+  60) bounds how many pages of a single document get OCR'd at all, as a
+  time/cost guard — raise it in `.env` (e.g. `MAX_OCR_PAGES=300`) if you want
+  full coverage of long scanned documents. This is independent of local vs.
+  cloud OCR; it just matters more once OCR is fast enough that running it
+  wasn't the bottleneck in the first place.
 
 ## Working fully offline
 

@@ -47,12 +47,14 @@ def iter_pdf_pages(path: Path) -> tuple[Iterator[tuple[int, str]], int, list[str
 
     def _gen() -> Iterator[tuple[int, str]]:
         ocr_used = 0
+        budget_warned = False
         for i in range(pages_to_read):
             page = doc.load_page(i)
             text = page.get_text("text") or ""
 
             # Scanned/image page (or text PyMuPDF couldn't read) → OCR fallback.
-            if len(text.strip()) < min_chars and ocr_used < ocr_budget:
+            needs_ocr = len(text.strip()) < min_chars
+            if needs_ocr and ocr_used < ocr_budget:
                 try:
                     png = _render_page_png(page)
                 except Exception:
@@ -64,6 +66,17 @@ def iter_pdf_pages(path: Path) -> tuple[Iterator[tuple[int, str]], int, list[str
                     if ocr_text and ocr_text.strip():
                         ocr_used += 1
                         text = f"{text}\n{ocr_text}".strip() if text.strip() else ocr_text
+            elif needs_ocr and not budget_warned:
+                # The page needed OCR but the per-document budget is already
+                # spent — this page (and likely more after it) silently gets
+                # no transcription at all. Warn once per document rather than
+                # once per remaining page.
+                warnings.append(
+                    f"{path.name}: reached the {ocr_budget:,}-page OCR budget at page "
+                    f"{i + 1:,} of {pages_to_read:,}; further scanned/image pages were "
+                    "not transcribed. Raise MAX_OCR_PAGES in .env for full coverage."
+                )
+                budget_warned = True
 
             yield i + 1, text
         doc.close()
