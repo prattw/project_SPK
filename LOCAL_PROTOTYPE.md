@@ -468,6 +468,26 @@ A couple of things worth knowing before re-running against a large library:
   cloud OCR; it just matters more once OCR is fast enough that running it
   wasn't the bottleneck in the first place.
 
+  Truncated files are already recorded in the index with their partial
+  chunks, so a plain re-run of `bulk_ingest.py` will **not** retry them — it
+  only retries files with zero recorded chunks. Delete the old partial
+  chunks first with `scripts/delete_sources.py`, then re-run the ingest:
+
+  ```bash
+  # Preview what would be removed (no changes made):
+  python scripts/delete_sources.py --contains "Corporate_Finance" --dry-run
+
+  # Actually remove the truncated chunks, then re-run bulk_ingest.py:
+  python scripts/delete_sources.py --contains "Corporate_Finance"
+  python -u scripts/bulk_ingest.py "/path/to/Master Library" | tee ~/bulk_ingest.log
+  ```
+
+  `--contains` matches by substring against every indexed filename
+  (case-insensitive), which is handy since scanned files often have a
+  timestamp suffix appended by the scanner. Use exact filenames instead
+  (positional args or `--from-file`) if you need to target specific files
+  precisely.
+
 ## Working fully offline
 
 Once setup is done, day-to-day use needs **no internet at all** — chat,
