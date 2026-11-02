@@ -156,7 +156,8 @@ source .venv/bin/activate
 
 The model is intentionally not hardcoded anywhere in the app — `app/llm.py`
 and `app/embeddings.py` just read whatever `OPENAI_MODEL` (and
-`OPENAI_EMBEDDING_MODEL`) says in `.env`. To try a different chat model:
+`OPENAI_EMBEDDING_MODEL`, `OPENAI_VISION_MODEL`) says in `.env`. To try a
+different chat model:
 
 ```bash
 ./scripts/switch_local_model.sh qwen3:14b
@@ -165,6 +166,18 @@ and `app/embeddings.py` just read whatever `OPENAI_MODEL` (and
 This pulls the model with Ollama if it isn't local yet, and updates
 `OPENAI_MODEL` in `.env` for you. Restart the app (`./start.sh`) afterward.
 Pick a size that fits your laptop's RAM/VRAM — see the sizing table above.
+
+`OPENAI_VISION_MODEL` (used for scanned-PDF OCR and image uploads) is
+separate on purpose — most chat models have no image understanding at all,
+so this needs its own, vision-capable model regardless of which chat model
+you're using:
+
+```bash
+./scripts/switch_local_model.sh --vision qwen2.5vl:7b
+```
+
+See "Fixing OCR on scanned PDFs" under bulk-loading below if OCR isn't
+producing any text.
 
 A couple of things to know when swapping:
 
@@ -387,6 +400,94 @@ Your uploaded/ingested documents now live in `chroma_db_local/` and
 `data_local/` on this laptop only — see the embedding-incompatibility note
 above for why this can never be merged with production's index.
 
+### Fixing OCR on scanned PDFs (every page comes back `EMPTY`)
+
+If `bulk_ingest.py`'s output looks like this for every file — `0 chunks`,
+taking anywhere from tens of seconds to several minutes each, never any
+`OK` lines — the configured chat model has no image understanding at all:
+
+```
+[    1/4429] EMPTY: Accounting_pt1.Scan2026-10-22_153923.pdf — 0 chunks in 263.1s
+[    2/4429] EMPTY: Advances in Financial ML Scan2026-09-18_150300.pdf — 0 chunks in 101.6s
+```
+
+Scanned pages (no embedded text layer) are only indexed via a vision-OCR
+fallback — see `OPENAI_VISION_MODEL` in `.env.local.example`. Most Ollama
+chat models (qwen2.5, qwen3, llama3.1+) are text-only: pointing one at a
+page image doesn't raise an error, it just silently transcribes nothing, so
+every scanned document "finishes" with zero searchable content and no
+warning anywhere in the output. (The slow per-file time above isn't the
+clue by itself — a local vision model doing real OCR is also slow — the
+real tell is that **every single file** comes back `EMPTY`, never `OK`.)
+
+Fix it by pointing `OPENAI_VISION_MODEL` at an actual vision-capable model:
+
+```bash
+./scripts/switch_local_model.sh --vision qwen2.5vl:7b
+# or: ./scripts/switch_local_model.sh --vision llava:7b
+```
+
+This pulls the model and updates `.env`. Restart the app (`./start.sh`), then
+re-run the exact same `bulk_ingest.py` command from step 3 above — it's safe
+to re-run: files that finished with 0 chunks were never actually recorded in
+the index (nothing to show for them in Chroma), so they'll be retried
+automatically, while anything that already indexed real content is skipped.
+
+A couple of things worth knowing before re-running against a large library:
+
+- **This is genuinely slow on CPU-only or low-VRAM hardware.** Each scanned
+  page is a separate vision-model call; a library with thousands of scanned
+  pages at even 10-30s/page can take a long time. Check whether Ollama is
+  actually using your GPU (`nvidia-smi` while a page is OCR'ing should show
+  load) — CPU-only vision inference is dramatically slower.
+- **If that's too slow to be practical**, route just the vision/OCR calls to
+  real OpenAI while keeping everyday chat on your local Ollama model —
+  `OPENAI_VISION_API_KEY` (+ optional `OPENAI_VISION_BASE_URL`) overrides
+  `OPENAI_API_KEY`/`OPENAI_BASE_URL` for vision calls only:
+
+  ```bash
+  # .env
+  OPENAI_VISION_API_KEY=sk-your-real-openai-key-here
+  OPENAI_VISION_MODEL=gpt-4o-mini
+  # OPENAI_VISION_BASE_URL left unset — defaults to real api.openai.com,
+  # not whatever OPENAI_BASE_URL points at.
+  ```
+
+  Restart the app afterward. This typically turns "tens of minutes per page
+  on a laptop GPU" into a couple of seconds per page — but the pages
+  themselves get sent to OpenAI's servers for that call (chat and embeddings
+  stay exactly where they were). Worth it if your documents aren't sensitive
+  enough to require staying fully local; not worth it if they are.
+
+- **If a long document's OCR output looks incomplete**, check the ingest
+  output for a line like `reached the 60-page OCR budget at page 61 of 340;
+  further scanned/image pages were not transcribed`. `MAX_OCR_PAGES` (default
+  60) bounds how many pages of a single document get OCR'd at all, as a
+  time/cost guard — raise it in `.env` (e.g. `MAX_OCR_PAGES=300`) if you want
+  full coverage of long scanned documents. This is independent of local vs.
+  cloud OCR; it just matters more once OCR is fast enough that running it
+  wasn't the bottleneck in the first place.
+
+  Truncated files are already recorded in the index with their partial
+  chunks, so a plain re-run of `bulk_ingest.py` will **not** retry them — it
+  only retries files with zero recorded chunks. Delete the old partial
+  chunks first with `scripts/delete_sources.py`, then re-run the ingest:
+
+  ```bash
+  # Preview what would be removed (no changes made):
+  python scripts/delete_sources.py --contains "Corporate_Finance" --dry-run
+
+  # Actually remove the truncated chunks, then re-run bulk_ingest.py:
+  python scripts/delete_sources.py --contains "Corporate_Finance"
+  python -u scripts/bulk_ingest.py "/path/to/Master Library" | tee ~/bulk_ingest.log
+  ```
+
+  `--contains` matches by substring against every indexed filename
+  (case-insensitive), which is handy since scanned files often have a
+  timestamp suffix appended by the scanner. Use exact filenames instead
+  (positional args or `--from-file`) if you need to target specific files
+  precisely.
+
 ## Working fully offline
 
 Once setup is done, day-to-day use needs **no internet at all** — chat,
@@ -428,10 +529,10 @@ one is about your own development/testing laptop, but the underlying
 
 ## What this does *not* cover
 
-- **Vision OCR for scanned pages.** Works the same way (routes through the
-  same `OPENAI_MODEL`), but a small local model doing OCR/vision on a
-  laptop CPU will be slow and lower quality than GPT-4o-mini. Fine for
-  testing that the code path works; don't judge OCR quality by it.
+- **Vision OCR for scanned pages.** Routes through its own `OPENAI_VISION_MODEL`
+  (see "Fixing OCR on scanned PDFs" below) — a small local vision model doing
+  OCR on a laptop CPU will be slower and lower quality than GPT-4o-mini. Fine
+  for testing that the code path works; don't judge OCR quality by it.
 - **Production changes of any kind.** Nothing here touches `railway.toml`,
   `railway.json`, the `Dockerfile`, or any Railway environment variable.
 

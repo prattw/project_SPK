@@ -22,6 +22,15 @@ if [[ "${1:-}" == "--model" && -n "${2:-}" ]]; then
 fi
 
 EMBED_MODEL="nomic-embed-text"
+# Dedicated vision model for scanned-PDF OCR and image uploads. The chat
+# models picked below (qwen2.5/llama3.2, text-only) have NO image
+# understanding at all — pointing them at a page image doesn't error, it
+# silently transcribes nothing, so scanned documents index with zero
+# content and no warning. llava is a long-established, widely-available
+# Ollama vision tag; see ollama.com/search?c=vision for alternatives
+# (e.g. qwen2.5vl tends to be stronger at dense-text/table OCR) if llava's
+# quality isn't good enough for your documents.
+VISION_MODEL="llava:7b"
 
 echo "== Project SPK local prototype setup =="
 
@@ -76,6 +85,7 @@ else
 fi
 
 echo "-- Chat model:      $CHAT_MODEL"
+echo "-- Vision model:    $VISION_MODEL (scanned-PDF OCR, image uploads)"
 echo "-- Embedding model: $EMBED_MODEL"
 echo
 
@@ -97,6 +107,9 @@ sleep 2
 
 echo "-- Pulling chat model ($CHAT_MODEL)... this can take a while on the first run."
 ollama pull "$CHAT_MODEL"
+
+echo "-- Pulling vision model ($VISION_MODEL) for scanned-PDF OCR..."
+ollama pull "$VISION_MODEL"
 
 echo "-- Pulling embedding model ($EMBED_MODEL)..."
 ollama pull "$EMBED_MODEL"
@@ -123,6 +136,7 @@ if [[ ! -f .env ]]; then
   echo "-- Writing .env for the local prototype (Ollama-backed)..."
   cp .env.local.example .env
   sed -i "s/^OPENAI_MODEL=.*/OPENAI_MODEL=$CHAT_MODEL/" .env
+  sed -i "s/^OPENAI_VISION_MODEL=.*/OPENAI_VISION_MODEL=$VISION_MODEL/" .env
   sed -i "s/^OPENAI_EMBEDDING_MODEL=.*/OPENAI_EMBEDDING_MODEL=$EMBED_MODEL/" .env
   echo "   Wrote .env — review it before running the app."
 else
@@ -155,7 +169,8 @@ Notes:
     mode" checkbox will appear above the chat box, letting the model search
     the library, read a document, and draft a report on its own. See
     LOCAL_PROTOTYPE.md for what it can and can't do yet.
-  - To try a different model later: ./scripts/switch_local_model.sh <tag>
+  - To try a different chat model later: ./scripts/switch_local_model.sh <tag>
+  - To try a different vision/OCR model: ./scripts/switch_local_model.sh --vision <tag>
   - To run fully offline (no internet at all), see the "Working offline"
     section in LOCAL_PROTOTYPE.md.
 EOF

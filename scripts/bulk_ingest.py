@@ -29,8 +29,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.config import settings  # noqa: E402
 from app.ingest import discover_documents, ingest_path  # noqa: E402
 from app.rag import get_rag  # noqa: E402
+
+# The web app only reports PDF page progress every N pages (fine for a
+# progress bar on a 2000-page spec). A CLI watching a scanned document move
+# through slow, per-page vision-model OCR calls needs to see every page —
+# otherwise a single 40-page scan can go fully silent for many minutes with
+# nothing to distinguish "working" from "stuck." This only affects this
+# process's own runtime behavior, not the app's.
+settings.pdf_progress_every_pages = 1
 
 
 LOCK_FILE = Path("/tmp/spk_bulk_ingest.pid")
@@ -106,8 +115,16 @@ def main() -> int:
         seen_names.add(name)
 
         t0 = time.time()
+
+        def _page_progress(page_num: int, pages_total: int, _t0: float = t0) -> None:
+            print(
+                f"        page {page_num}/{pages_total} "
+                f"({time.time() - _t0:.0f}s elapsed on this file)",
+                flush=True,
+            )
+
         try:
-            result = ingest_path(path, extra_meta=extra_meta)
+            result = ingest_path(path, extra_meta=extra_meta, progress_callback=_page_progress)
             chunks = int(result.get("chunks_indexed", 0))
             total_chunks += chunks
             done += 1

@@ -11,6 +11,13 @@ from openai import BadRequestError, OpenAI
 from app.config import settings
 from app.token_usage import record_chat_usage
 
+# Sentinel distinguishing "no api_key/base_url override given" (use the
+# OPENAI_API_KEY/OPENAI_BASE_URL settings) from "explicitly overridden to a
+# blank string" (e.g. force the real api.openai.com default rather than
+# inheriting a local OPENAI_BASE_URL) — `None` can't do this since `None` and
+# `""` both need to mean something different from "not provided at all."
+_UNSET = object()
+
 COMPLIANCE_FORMAT = """Format this answer like a USACE technical compliance review:
 
 - Organize with clear markdown headings and numbered items (e.g., "COMPLIANT ITEMS:", "NON-COMPLIANT OR MISSING ITEMS:", "Recommended Approach:").
@@ -120,19 +127,30 @@ def _create_completion(
     *,
     temperature: float,
     tools: list[dict[str, Any]] | None = None,
+    model: str | None = None,
+    api_key: str | None = _UNSET,
+    base_url: str | None = _UNSET,
 ):
     """Shared low-level chat-completion call with cross-model parameter fallback.
 
     Newer OpenAI models (gpt-5 family, o-series) require max_completion_tokens
     and reject custom temperature; older ones (gpt-4o family) accept max_tokens.
+    `model`/`api_key`/`base_url` override the OPENAI_MODEL/OPENAI_API_KEY/
+    OPENAI_BASE_URL settings for this call only (used for vision calls, which
+    may need a different model and even a different account/endpoint than
+    everyday chat — see OPENAI_VISION_MODEL / OPENAI_VISION_API_KEY). Pass an
+    explicit "" for base_url to force the real OpenAI default rather than
+    inheriting OPENAI_BASE_URL — omitting the argument entirely inherits it.
     Returns the raw SDK message object (content and, if requested, tool_calls).
     """
-    if not settings.openai_api_key:
+    resolved_key = settings.openai_api_key if api_key is _UNSET else api_key
+    if not resolved_key:
         raise ValueError("OPENAI_API_KEY is not configured")
 
-    client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url or None)
+    resolved_base_url = settings.openai_base_url if base_url is _UNSET else base_url
+    client = OpenAI(api_key=resolved_key, base_url=resolved_base_url or None)
     kwargs: dict = {
-        "model": settings.openai_model,
+        "model": model or settings.openai_model,
         "messages": messages,
         "max_completion_tokens": settings.openai_max_tokens,
         "temperature": temperature,
@@ -163,9 +181,18 @@ def _create_completion(
     raise RuntimeError("Could not find compatible parameters for the configured model")
 
 
-def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
+def _chat(
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.35,
+    model: str | None = None,
+    api_key: str | None = _UNSET,
+    base_url: str | None = _UNSET,
+) -> str:
     """Call the chat API and return the assistant's text content."""
-    message = _create_completion(messages, temperature=temperature)
+    message = _create_completion(
+        messages, temperature=temperature, model=model, api_key=api_key, base_url=base_url
+    )
     return (message.content or "").strip()
 
 
@@ -219,11 +246,28 @@ IMAGE_MIME_BY_EXT = {
 def _vision_call(data: bytes, mime: str, prompt: str) -> str:
     """Send image bytes + a prompt to the configured vision model.
 
+    Uses OPENAI_VISION_MODEL if set, otherwise OPENAI_MODEL — see the
+    OPENAI_VISION_MODEL comment in config.py for why these can need to differ
+    (a non-vision local/Ollama chat model silently returns no transcription
+    for an image instead of erroring).
+
+    Also supports routing vision calls to an entirely different
+    account/endpoint via OPENAI_VISION_API_KEY (+ optional
+    OPENAI_VISION_BASE_URL) — e.g. everyday chat against a local Ollama
+    model, but vision/OCR against real OpenAI for speed. When
+    OPENAI_VISION_API_KEY is set, OPENAI_VISION_BASE_URL defaults to blank
+    (real api.openai.com), not whatever OPENAI_BASE_URL points at, since the
+    two are typically intentionally different endpoints.
+
     Returns the model text, or "" if not possible (no key, empty data, or
     model/network error). Callers decide on a fallback.
     """
-    if not settings.openai_api_key or not data:
+    vision_key = settings.openai_vision_api_key or settings.openai_api_key
+    if not vision_key or not data:
         return ""
+    vision_base_url = (
+        settings.openai_vision_base_url if settings.openai_vision_api_key else settings.openai_base_url
+    )
     b64 = base64.b64encode(data).decode("ascii")
     messages = [
         {
@@ -235,7 +279,12 @@ def _vision_call(data: bytes, mime: str, prompt: str) -> str:
         }
     ]
     try:
-        return _chat(messages)
+        return _chat(
+            messages,
+            model=settings.openai_vision_model or None,
+            api_key=vision_key,
+            base_url=vision_base_url,
+        )
     except Exception:
         return ""
 

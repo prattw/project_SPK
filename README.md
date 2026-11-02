@@ -132,6 +132,9 @@ Retrieval pulls relevant chunks from all indexed files; GPT answers with citatio
 | `OPENAI_API_KEY` | Required (chat + embeddings) |
 | `OPENAI_BASE_URL` | Optional API root override; blank = OpenAI default |
 | `OPENAI_MODEL` | Default `gpt-4o-mini` |
+| `OPENAI_VISION_MODEL` | Model used for image/scanned-PDF OCR; blank = reuse `OPENAI_MODEL` |
+| `OPENAI_VISION_API_KEY` / `OPENAI_VISION_BASE_URL` | Optional separate credentials/endpoint for vision calls only; blank = reuse `OPENAI_API_KEY`/`OPENAI_BASE_URL` |
+| `MAX_OCR_PAGES` | Pages of a single scanned PDF that get OCR'd before the rest are skipped; default `60` |
 | `OPENAI_EMBEDDING_MODEL` | Default `text-embedding-3-small` |
 | `MAX_UPLOAD_MB` | Default `300` |
 

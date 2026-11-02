@@ -58,6 +58,15 @@ def ingest_path(
             initial_warnings=pdf_warnings,
             extra_meta=merged_meta,
         )
+        # ingest_pdf_pages() snapshots initial_warnings into its own list
+        # before consuming page_iter, so warnings appended to pdf_warnings
+        # *during* generation (e.g. hitting the OCR-page budget partway
+        # through) aren't in `warnings` yet even though pdf_warnings (the
+        # same list object iter_pdf_pages' generator closed over) now has
+        # them — merge them in so callers actually see them.
+        for w in pdf_warnings:
+            if w not in warnings:
+                warnings.append(w)
         message = (
             f"Indexed {pages_indexed:,} pages ({count:,} chunks) from {source}."
         )

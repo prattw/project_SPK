@@ -13,6 +13,32 @@ class Settings(BaseSettings):
     openai_base_url: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_max_tokens: int = 4096
+    # Model used for vision calls (image description, scanned-PDF OCR). Empty
+    # = reuse OPENAI_MODEL. gpt-4o-mini (the default OPENAI_MODEL) supports
+    # vision, so production needs no override. Local/Ollama setups often pick
+    # a text-only chat model (e.g. qwen2.5:7b-instruct, qwen3:8b) that has no
+    # image understanding at all — pointing OPENAI_MODEL's non-vision model at
+    # an image doesn't error, it just silently produces no transcription, so
+    # every scanned page/document ends up indexed with zero chunks and no
+    # warning. Set this to a vision-capable model (e.g. qwen2.5vl:7b via
+    # Ollama; see ollama.com/search?c=vision) to fix OCR without changing
+    # which model handles everyday chat.
+    openai_vision_model: str = ""
+    # Separate credentials/endpoint for vision calls only (scanned-PDF OCR,
+    # image uploads). Lets a local/Ollama setup send everyday chat to a local
+    # model while routing just the (often much slower, locally) vision calls
+    # to real OpenAI — e.g. a laptop GPU doing real OCR on a scanned document
+    # can take tens of minutes per file; gpt-4o-mini typically does the same
+    # page in a couple of seconds. Leave both blank to reuse OPENAI_API_KEY /
+    # OPENAI_BASE_URL for vision too (current default, unaffected). If set,
+    # OPENAI_VISION_API_KEY alone is enough — OPENAI_VISION_BASE_URL defaults
+    # to blank (real api.openai.com) rather than inheriting a local
+    # OPENAI_BASE_URL override, since the two are typically pointed at
+    # different places on purpose. Remember to also set OPENAI_VISION_MODEL
+    # to a real OpenAI vision model (e.g. gpt-4o-mini) when enabling this —
+    # a local Ollama model tag isn't valid against the real OpenAI API.
+    openai_vision_api_key: str = ""
+    openai_vision_base_url: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     embedding_provider: str = "openai"
     embedding_batch_size: int = 128
