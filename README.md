@@ -1,6 +1,8 @@
 # Project SPK — Construction Document RAG
 
-Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. Powered by **OpenAI** (GPT + embeddings).
+Chat-style app for construction teams: upload PDFs, P6 schedules, IFC models, and more — then ask questions or compare documents. Powered by **OpenAI** (GPT + embeddings). This is the online app.
+
+ProjNet comment and backcheck drafts are a separate app on the Mac mini: [drchecks/README.md](drchecks/README.md). That app does not replace this one and does not run on Railway.
 
 ## Recommended stack (your questions)
 

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Review Desk</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">Separate from Project SPK</p>
+      <h1>Review Desk</h1>
+    </div>
+    <p class="banner">ProjNet stays the system of record. Drafts are pasted back into it. Comments stay on this Mac.</p>
+  </header>
+
+  <main>
+    <section class="list-pane">
+      <form id="import-form">
+        <label>DrChecks XML export
+          <input id="xml-file" type="file" accept=".xml,text/xml" />
+        </label>
+        <button type="submit">Import</button>
+        <p id="import-status" class="status"></p>
+      </form>
+      <ul id="comment-list"></ul>
+      <button id="new-comment" type="button">New comment from notes</button>
+    </section>
+
+    <section class="detail-pane">
+      <form id="detail-form">
+        <div class="grid">
+          <label>Discipline <input id="discipline" name="discipline" /></label>
+          <label>Document / sheet <input id="document" name="document" /></label>
+          <label>Spec section <input id="section" name="section" /></label>
+          <label>Status <input id="status" name="status" readonly /></label>
+        </div>
+        <label>Comment
+          <textarea id="comment" name="comment" rows="6"></textarea>
+        </label>
+        <label>Evaluation already in the export
+          <textarea id="response" name="response" rows="4" readonly></textarea>
+        </label>
+        <label>Backcheck already in the export
+          <textarea id="backcheck" name="backcheck" rows="3" readonly></textarea>
+        </label>
+        <label>Note for this draft
+          <textarea id="note" name="note" rows="3" placeholder="What you saw, or a clash description pasted from Navisworks."></textarea>
+        </label>
+        <div class="actions">
+          <button type="button" data-kind="comment">Draft comment</button>
+          <button type="button" data-kind="evaluation">Draft evaluation</button>
+          <button type="button" data-kind="backcheck">Draft backcheck</button>
+        </div>
+      </form>
+      <div id="publications"></div>
+      <label>Draft to paste into ProjNet
+        <textarea id="draft" rows="8" readonly></textarea>
+      </label>
+      <button id="copy" type="button">Copy draft</button>
+      <p id="draft-status" class="status"></p>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
