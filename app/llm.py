@@ -114,18 +114,34 @@ Be precise and practical. If you are not certain, say so.
 Since no project documents were retrieved, cite publication numbers from general knowledge instead of page-level citations."""
 
 
-def _chat(messages: list[dict[str, str]], *, temperature: float = 0.35) -> str:
+def vision_model_name() -> str:
+    """Model used for scanned-page OCR and image description.
+
+    A local text model cannot read a drawing, so this may be a second model.
+    Left unset, vision stays on the chat model, which is what the OpenAI
+    deployment does.
+    """
+    return settings.openai_vision_model or settings.openai_model
+
+
+def _chat(
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.35,
+    model: str | None = None,
+) -> str:
     """Call the chat API, handling parameter differences between model generations.
 
     Newer OpenAI models (gpt-5 family, o-series) require max_completion_tokens
     and reject custom temperature; older ones (gpt-4o family) accept max_tokens.
+    Ollama rejects max_completion_tokens, and the fallback below covers that.
     """
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
 
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url or None)
     kwargs: dict = {
-        "model": settings.openai_model,
+        "model": model or settings.openai_model,
         "messages": messages,
         "max_completion_tokens": settings.openai_max_tokens,
         "temperature": temperature,
@@ -202,7 +218,7 @@ def _vision_call(data: bytes, mime: str, prompt: str) -> str:
         }
     ]
     try:
-        return _chat(messages)
+        return _chat(messages, model=vision_model_name())
     except Exception:
         return ""
 

@@ -12,6 +12,20 @@ _RETRYABLE = (RateLimitError, APIConnectionError, APITimeoutError, InternalServe
 _MAX_RETRIES = 6
 
 
+def prepare_embedding_inputs(texts: list[str], *, query: bool) -> list[str]:
+    """Add the task prefix nomic-embed-text was trained with.
+
+    Without ``search_document:`` on indexed text and ``search_query:`` on the
+    question, that model retrieves noticeably worse. Other embedding models,
+    including OpenAI's, are left untouched.
+    """
+    model = settings.openai_embedding_model.lower()
+    if "nomic-embed" not in model:
+        return texts
+    prefix = "search_query: " if query else "search_document: "
+    return [prefix + text for text in texts]
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
@@ -48,17 +62,18 @@ def _embed_voyage(texts: list[str]) -> list[list[float]]:
     return result.embeddings
 
 
-def _embed_openai(texts: list[str]) -> list[list[float]]:
+def _embed_openai(texts: list[str], *, query: bool = False) -> list[list[float]]:
     if not settings.openai_api_key:
-        raise ValueError("OPENAI_API_KEY is not configured (needed for OpenAI embeddings)")
+        raise ValueError("OPENAI_API_KEY is not configured (needed for embeddings)")
 
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url or None)
+    payload = prepare_embedding_inputs(texts, query=query)
     delay = 2.0
     for attempt in range(_MAX_RETRIES):
         try:
             response = client.embeddings.create(
                 model=settings.openai_embedding_model,
-                input=texts,
+                input=payload,
             )
             usage = getattr(response, "usage", None)
             if usage:
@@ -85,6 +100,6 @@ def embed_query(text: str) -> list[float]:
         return result.embeddings[0]
 
     if provider == "openai":
-        return embed_texts([text])[0]
+        return _embed_openai([text], query=True)[0]
 
     raise ValueError(f"Unknown embedding provider: {provider}")

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from collections.abc import Callable, Iterator
 from typing import Any
+
+# Chroma's default telemetry posts to a vendor endpoint. Documents stay on
+# this machine; do not let the client phone home. Set before importing chromadb.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 import chromadb
 from chromadb.api.models.Collection import Collection

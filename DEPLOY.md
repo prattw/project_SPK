@@ -1,5 +1,9 @@
 # Deploy Project SPK (Railway)
 
+This is the live deployment. A Mac mini self-host that uses Ollama instead of
+the OpenAI API is built in **[MAC_MINI.md](MAC_MINI.md)**. Setting that Mac up
+does not change this service. Leave Railway running until you decide to switch.
+
 ## Prerequisites
 
 - [Railway](https://railway.app) account
